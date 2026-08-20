@@ -9,7 +9,7 @@ import type {
   SourceId,
   SourceInfo,
 } from "../lib/types";
-import { INITIAL_CREDITS, SEED_CHATS, SOURCES } from "../lib/mockData";
+import { DEFAULT_ENABLED_SOURCES, INITIAL_CREDITS, SEED_CHATS, SOURCES } from "../lib/mockData";
 import { planMockRun } from "../lib/mockEngine";
 
 /**
@@ -91,7 +91,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
         title: context ? context.label : "New chat",
         createdAt: ts,
         updatedAt: ts,
-        enabledSources: ["commas", "fathom", "zoom"],
+        enabledSources: [...DEFAULT_ENABLED_SOURCES],
         context,
         messages: [],
       };

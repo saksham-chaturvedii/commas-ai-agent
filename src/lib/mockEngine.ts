@@ -1,11 +1,15 @@
 import type { PageContext, ProgressStep, SourceId, ToolSummaryItem } from "./types";
 
 /**
- * Scripted "agent" for the UI foundation pass — NOT a real agent loop, NOT connected to an
- * LLM or MCP. It pattern-matches the prompt and returns a canned multi-step plan so the chat
- * UI has something realistic to render (progress lines, source attribution, a final answer).
- * See docs/active-context.md "What remains mocked" and docs/ARCHITECTURE.md §4-9 for what a
- * real implementation replaces this with.
+ * Scripted "agent" for the UI foundation — NOT a real agent loop, NOT connected to an LLM or
+ * MCP. It pattern-matches the prompt and returns a canned multi-step plan so the chat UI has
+ * something realistic to render (progress lines, source attribution, a final answer). See
+ * docs/active-context.md "What remains mocked" and docs/ARCHITECTURE.md §4-9 for what a real
+ * implementation replaces this with.
+ *
+ * The dispute story matches src/lib/disputeData.ts (August 2026): purchase Aug 2 14:32 UTC,
+ * access granted 14:33, 14 logins Aug 2–8, 6 of 12 lessons completed, support thread Aug 2–3,
+ * dispute opened Aug 9, evidence due Aug 13.
  */
 
 export interface MockRunPlan {
@@ -23,13 +27,16 @@ function summarize(steps: ProgressStep[]): ToolSummaryItem[] {
   return steps.map((s) => ({ sourceId: s.sourceId, label: s.label, ok: true }));
 }
 
-const CONNECTED_APP_LABELS: Record<SourceId, string> = {
+const SOURCE_LABELS: Record<SourceId, string> = {
   commas: "Commas",
-  fathom: "Fathom",
+  "google-calendar": "Google Calendar",
   zoom: "Zoom",
-  "google-meet": "Google Meet",
-  clickfunnels: "ClickFunnels",
+  fathom: "Fathom",
+  gmail: "Gmail",
+  crm: "your CRM",
 };
+
+const EXTERNAL_SOURCES: SourceId[] = ["google-calendar", "zoom", "fathom", "gmail", "crm"];
 
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -49,52 +56,68 @@ export function planMockRun(input: {
   enabledSources: SourceId[];
   context?: PageContext;
 }): MockRunPlan {
-  const { prompt, enabledSources, context } = input;
+  const { prompt, enabledSources } = input;
   const has = (id: SourceId) => enabledSources.includes(id);
+  const noCommas = (what: string): MockRunPlan => ({
+    steps: [],
+    answer: `Commas is turned off as a source for this chat, so I can't check ${what}. Enable it in the sources menu and ask again.`,
+    toolSummary: [],
+  });
 
   // 1. Direct answers — no tool use.
-  if (includes(prompt, "what can you", "help", "hi", "hello", "hey")) {
+  if (includes(prompt, "what can you", "help me get started", "hi", "hello", "hey")) {
     return {
       steps: [],
       answer:
-        "I can help you investigate your Commas business — sales, customers, discount codes, " +
-        "subscriptions — and, on a dispute page, pull in your connected apps to help you " +
-        "respond. Try one of the suggestions below, or ask me something directly.",
+        "I can help you run your Commas business — summarize sales, look up customers, analyze " +
+        "disputes, draft customer responses — and pull in your connected apps (calendar, " +
+        "meetings, calls, email, CRM) when the answer lives off-platform. Try one of the " +
+        "suggestions below, or just ask.",
       toolSummary: [],
     };
   }
 
-  // 2. Sales summary.
+  // 2. Revenue-drop analysis (dashboard-contextual suggestion) — check before generic sales.
+  if (includes(prompt, "dropped", "drop", "down", "declined", "why revenue")) {
+    if (!has("commas")) return noCommas("your revenue");
+    const steps = [
+      step("commas", "Checking this month's transactions…"),
+      step("commas", "Comparing against last month…"),
+      step("commas", "Checking refunds & subscriptions…"),
+    ];
+    return {
+      steps,
+      answer:
+        "### What changed\n\n" +
+        "Revenue is down **9% month-over-month** ($18,420 vs $20,240). Three things account " +
+        "for almost all of it:\n\n" +
+        "- **1:1 Strategy Call bookings fell** from 14 to 9 — about $1,250 of the gap (Commas)\n" +
+        "- **3 refunds totaling $960** vs 1 last month (Commas)\n" +
+        "- **2 subscription cancellations** at the start of the month (Commas)\n\n" +
+        "New Pro Coaching Program sales are actually up slightly — the drop is concentrated in " +
+        "call bookings and refunds, not your core product.",
+      toolSummary: summarize(steps),
+    };
+  }
+
+  // 3. Sales summary.
   if (includes(prompt, "sales", "summary", "revenue")) {
-    if (!has("commas")) {
-      return {
-        steps: [],
-        answer:
-          "Commas is turned off as a source for this chat, so I don't have anything to check " +
-          "sales against. Enable Commas in the sources menu and ask again.",
-        toolSummary: [],
-      };
-    }
+    if (!has("commas")) return noCommas("sales");
     const steps = [step("commas", "Checking transaction history…"), step("commas", "Checking products…")];
     return {
       steps,
       answer:
         "This month you've done **$18,420** across 62 transactions — up 12% from last month. " +
         "**Pro Coaching Program** is your top seller ($9,800), followed by **1:1 Strategy Call** " +
-        "($4,250). 3 refunds totaling $960 were issued, and 1 dispute is currently open (#2481).",
+        "($4,250). 3 refunds totaling $960 were issued, and 1 dispute is currently open " +
+        "(#2481, evidence due August 13).",
       toolSummary: summarize(steps),
     };
   }
 
-  // 3. Discount codes.
+  // 4. Discount codes.
   if (includes(prompt, "discount", "coupon", "promo")) {
-    if (!has("commas")) {
-      return {
-        steps: [],
-        answer: "Commas is turned off as a source for this chat — enable it to check discount codes.",
-        toolSummary: [],
-      };
-    }
+    if (!has("commas")) return noCommas("discount codes");
     const steps = [step("commas", "Checking discount codes…")];
     return {
       steps,
@@ -106,106 +129,161 @@ export function planMockRun(input: {
     };
   }
 
-  // 4. Customer lookup.
-  if (includes(prompt, "customer", "look up", "lookup", "sarah")) {
-    if (!has("commas")) {
-      return {
-        steps: [],
-        answer: "Commas is turned off as a source for this chat — enable it to look up customers.",
-        toolSummary: [],
-      };
-    }
-    const steps = [step("commas", "Searching customers…"), step("commas", "Checking transaction history…")];
-    return {
-      steps,
-      answer:
-        "**Sarah Johnson** (sarah.johnson@example.com) — customer since Jan 2026. 1 purchase: " +
-        "**Pro Coaching Program**, $499, on Feb 3. Payment status: disputed (#2481, \"Product not " +
-        "received\", filed Feb 8, due Feb 15). No prior refunds or disputes on this account.",
-      toolSummary: summarize(steps),
-    };
-  }
-
-  // 5. Dispute investigation / evidence draft — the flagship flow. Richer when opened with
-  // dispute page context, but answers generically if asked from standalone chat too.
-  if (includes(prompt, "dispute", "investigate", "evidence", "draft a response", "chargeback")) {
+  // 5. Dispute investigation / evidence draft — the flagship flow. Checked before the
+  // customer branches so dispute-context prompts land here.
+  if (includes(prompt, "dispute", "disputes", "resolve", "evidence", "chargeback", "delivery")) {
+    if (!has("commas")) return noCommas("the dispute");
     const wantsDraft = includes(prompt, "draft", "response");
-    const allSteps: ProgressStep[] = [
+
+    const commasSteps: ProgressStep[] = [
       step("commas", "Checking dispute record…"),
       step("commas", "Checking customer & transaction…"),
-      step("commas", "Checking subscription & access logs…"),
+      step("commas", "Checking access & activity logs…"),
     ];
-    const connectedAppSteps: ProgressStep[] = [
-      step("fathom", `Searching Fathom calls with ${context ? "the customer" : "Sarah"}…`),
+    const externalSteps: ProgressStep[] = [
+      step("fathom", "Searching Fathom calls with Sarah…"),
       step("zoom", "Checking Zoom meeting history…"),
-      step("google-meet", "Checking Google Meet calendar…"),
-      step("clickfunnels", "Checking ClickFunnels order trail…"),
+      step("google-calendar", "Checking scheduled sessions…"),
+      step("gmail", "Searching email threads with Sarah…"),
+      step("crm", "Checking CRM contact record…"),
     ].filter((s) => has(s.sourceId));
+    const steps = [...commasSteps, ...externalSteps];
 
-    const skipped = (["fathom", "zoom", "google-meet", "clickfunnels"] as SourceId[]).filter(
-      (id) => !has(id),
-    );
-
-    const steps = [...allSteps, ...connectedAppSteps];
-
-    const hasFathom = connectedAppSteps.some((s) => s.sourceId === "fathom");
-    const hasZoom = connectedAppSteps.some((s) => s.sourceId === "zoom");
-    const hasClickfunnels = connectedAppSteps.some((s) => s.sourceId === "clickfunnels");
-
+    const skipped = EXTERNAL_SOURCES.filter((id) => !has(id));
     const skippedNote =
       skipped.length > 0
-        ? ` I couldn't check ${skipped.map((id) => CONNECTED_APP_LABELS[id]).join(", ")} — ${
-            skipped.length === 1 ? "it's" : "they're"
-          } turned off for this chat.`
+        ? ` I couldn't check ${skipped.map((id) => SOURCE_LABELS[id]).join(", ")} — ${
+            skipped.length === 1 ? "it isn't" : "they aren't"
+          } available to this chat.`
         : "";
+
+    const hasFathom = has("fathom");
+    const hasZoom = has("zoom");
+    const hasCalendar = has("google-calendar");
+    const hasGmail = has("gmail");
+    const hasCrm = has("crm");
 
     const caseSummary =
       "### Case summary\n\n" +
-      "**Dispute #2481 — $499, \"Product not received\"**. Sarah Johnson purchased the Pro " +
-      "Coaching Program on Feb 3 and was granted immediate portal access." +
+      "**Dispute #2481 — $499.00, \"Product not received\"**, opened August 9, evidence due " +
+      "**August 13**. Sarah Johnson purchased the Pro Coaching Program on August 2 at 14:32 UTC " +
+      "and was granted access one minute later. Her account shows sustained use of the program " +
+      "after purchase." +
       skippedNote;
 
     const timelineItems = [
-      "- **Feb 3** — Purchase completed, portal access granted (Commas)",
-      "- **Feb 3–7** — 4 logins recorded (Commas activity logs)",
+      "- **Aug 2, 14:32 UTC** — $499.00 payment processed, txn_8b3f2a1c9d (Commas)",
+      "- **Aug 2, 14:33 UTC** — Program access granted; welcome email delivered (Commas)",
+      "- **Aug 2–3** — Support thread: Sarah asked how to access, confirmed \"I'm in now\" (Commas)",
+      "- **Aug 3, 10:32 AM** — First login, 18 hours after purchase (Commas)",
     ];
-    if (hasFathom) timelineItems.push("- **Feb 4** — 42-minute onboarding call (Fathom)");
-    if (hasZoom) timelineItems.push("- **Feb 4** — Matching Zoom join time recorded (Zoom)");
-    if (hasFathom) timelineItems.push("- **Feb 6** — Coaching session call (Fathom)");
-    if (hasZoom) timelineItems.push("- **Feb 6** — Matching Zoom join time recorded (Zoom)");
-    if (hasClickfunnels) timelineItems.push("- **Feb 3** — Checkout completed, no prior chargebacks (ClickFunnels)");
+    if (hasCalendar) timelineItems.push("- **Aug 4 & Aug 6** — Accepted session invitations on her calendar (Google Calendar)");
+    if (hasFathom) timelineItems.push("- **Aug 4** — 42-minute onboarding call recorded (Fathom)");
+    if (hasZoom) timelineItems.push("- **Aug 4 & Aug 6** — Matching meeting join times (Zoom)");
+    if (hasFathom) timelineItems.push("- **Aug 6** — Group coaching session recorded (Fathom)");
+    if (hasGmail) timelineItems.push("- **Aug 2** — Welcome + access emails delivered and opened (Gmail)");
+    timelineItems.push("- **Aug 2–8** — 14 logins, 6 of 12 lessons completed (Commas)");
+    timelineItems.push("- **Aug 9** — Dispute opened: \"Product not received\" (Commas)");
     const timeline = "### Timeline\n\n" + timelineItems.join("\n");
 
-    const evidenceItems = ["- Login activity: 4 sessions between Feb 3–7 (Commas)"];
-    if (hasFathom) evidenceItems.push("- Call recordings: onboarding (Feb 4) and coaching session (Feb 6) (Fathom)");
+    const evidenceItems = [
+      "- Transaction receipt: $499.00, Visa •••• 4242, Aug 2 14:32 UTC (Commas)",
+      "- Access & login records: access at 14:33, 14 logins Aug 2–8 (Commas)",
+      "- Lesson activity: 6 of 12 lessons completed (Commas)",
+      "- Support thread where Sarah confirmed access in writing (Commas)",
+    ];
+    if (hasFathom) evidenceItems.push("- Call recordings: onboarding Aug 4, coaching session Aug 6 (Fathom)");
     if (hasZoom) evidenceItems.push("- Meeting log corroborating both sessions (Zoom)");
-    if (hasClickfunnels) evidenceItems.push("- Completed order with no prior chargebacks (ClickFunnels)");
+    if (hasCalendar) evidenceItems.push("- Accepted calendar invitations for both sessions (Google Calendar)");
+    if (hasGmail) evidenceItems.push("- Delivered and opened welcome/access emails (Gmail)");
+    if (hasCrm) evidenceItems.push("- Active-client contact record with engagement notes (CRM)");
     const evidence = "### Evidence\n\n" + evidenceItems.join("\n");
 
     const draft =
       "### Drafted response\n\n" +
-      "\"The customer received full access to the Pro Coaching Program immediately upon " +
-      "purchase and logged in 4 times over the following week, including two live coaching " +
-      "sessions on Feb 4 and Feb 6. Login timestamps, session recordings, and calendar " +
-      "records are attached as evidence.\" You can copy this draft — nothing is submitted " +
-      "automatically.";
-
-    const answer = [caseSummary, timeline, evidence, ...(wantsDraft ? [draft] : [])].join("\n\n");
+      "\"Sarah Johnson purchased the Pro Coaching Program ($499.00) on August 2, 2026 at 14:32 " +
+      "UTC (txn_8b3f2a1c9d). Access was granted one minute after payment and confirmed by the " +
+      "customer in writing. Our records show 14 logins and 6 completed lessons between August 2 " +
+      "and August 8, plus attended live sessions on August 4 and 6. The customer accepted our " +
+      "terms and 14-day refund policy at checkout and did not request a refund before disputing. " +
+      "We ask that this dispute be resolved in the seller's favor.\" " +
+      "You can copy this into the response box — nothing is submitted automatically.";
 
     return {
       steps,
-      answer,
+      answer: [caseSummary, timeline, evidence, ...(wantsDraft ? [draft] : [])].join("\n\n"),
       toolSummary: summarize(steps),
     };
   }
 
-  // 6. Fallback — honest about being a scripted demo, not a general assistant.
+  // 6. Help me respond to a customer (no dispute keyword) — comms check + drafted reply.
+  if (includes(prompt, "respond", "reply")) {
+    if (!has("commas")) return noCommas("your conversations");
+    const steps = [step("commas", "Checking recent conversations…")];
+    return {
+      steps,
+      answer:
+        "Your most recent open thread is from **Sarah Johnson** (Aug 2): she asked how to access " +
+        "the Pro Coaching Program, support replied with the login link, and she confirmed access " +
+        "the next day — nothing outstanding there. If you tell me which customer you want to " +
+        "reply to, I'll pull their history and draft a response in your tone.",
+      toolSummary: summarize(steps),
+    };
+  }
+
+  // 7. Cross-app search.
+  if (includes(prompt, "connected apps", "across my", "find information")) {
+    const externalSteps = [
+      step("google-calendar", "Checking scheduled sessions…"),
+      step("zoom", "Checking meeting history…"),
+      step("fathom", "Checking call recordings…"),
+      step("gmail", "Checking email threads…"),
+      step("crm", "Checking contact records…"),
+    ].filter((s) => has(s.sourceId));
+    if (externalSteps.length === 0) {
+      return {
+        steps: [],
+        answer:
+          "No connected apps are available to this chat right now. Connect Google Calendar, " +
+          "Zoom, Fathom, Gmail, or your CRM (or enable them in the sources menu) and I can " +
+          "search across them.",
+        toolSummary: [],
+      };
+    }
+    const found = externalSteps.map((s) => SOURCE_LABELS[s.sourceId]).join(", ");
+    return {
+      steps: externalSteps,
+      answer:
+        `I can currently see **${found}**. Across them I found: 2 upcoming coaching sessions ` +
+        "this week, 3 call recordings with customers from the last 14 days, and 2 accepted " +
+        "session invitations from Sarah Johnson. Ask me about a specific customer or session " +
+        "and I'll dig in.",
+      toolSummary: summarize(externalSteps),
+    };
+  }
+
+  // 8. Customer lookup.
+  if (includes(prompt, "customer", "look up", "lookup", "sarah", "history")) {
+    if (!has("commas")) return noCommas("customers");
+    const steps = [step("commas", "Searching customers…"), step("commas", "Checking transaction history…")];
+    return {
+      steps,
+      answer:
+        "**Sarah Johnson** (sarah.johnson@email.com) — 1 purchase: **Pro Coaching Program**, " +
+        "$499.00, on August 2, 2026 (txn_8b3f2a1c9d). Account activity: 14 logins and 6 of 12 " +
+        "lessons completed between Aug 2–8. Payment status: disputed (#2481, \"Product not " +
+        "received\", opened Aug 9, evidence due Aug 13). No prior refunds or disputes.",
+      toolSummary: summarize(steps),
+    };
+  }
+
+  // 9. Fallback — honest about being a scripted demo, not a general assistant.
   return {
     steps: [],
     answer:
-      "This preview only knows a handful of demo scenarios right now — try asking about " +
-      "sales, discount codes, a customer, or the open dispute, or use one of the suggestions " +
-      "below.",
+      "This preview only knows a handful of demo scenarios right now — try asking about sales, " +
+      "discount codes, a customer, your revenue, or the open dispute, or use one of the " +
+      "suggestions below.",
     toolSummary: [],
   };
 }

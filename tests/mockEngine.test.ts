@@ -31,8 +31,33 @@ describe("planMockRun", () => {
     const sourceIds = new Set(plan.steps.map((s) => s.sourceId));
     expect(sourceIds.has("fathom")).toBe(true);
     expect(sourceIds.has("zoom")).toBe(false);
-    expect(sourceIds.has("clickfunnels")).toBe(false);
-    expect(plan.answer).toContain("turned off");
+    expect(sourceIds.has("gmail")).toBe(false);
+    expect(sourceIds.has("crm")).toBe(false);
+    expect(plan.answer).toContain("available to this chat");
+  });
+
+  it("analyzes a revenue drop with Commas-only steps", () => {
+    const plan = planMockRun({
+      prompt: "Help me understand why revenue dropped this month",
+      enabledSources: ["commas"],
+      context: { kind: "dashboard", id: "dashboard", label: "Dashboard" },
+    });
+    expect(plan.steps.length).toBeGreaterThan(0);
+    expect(plan.steps.every((s) => s.sourceId === "commas")).toBe(true);
+    expect(plan.answer).toContain("What changed");
+  });
+
+  it("searches only enabled external sources for a cross-app query", () => {
+    const plan = planMockRun({
+      prompt: "Find information across my connected apps",
+      enabledSources: ["commas", "zoom", "fathom"],
+      context: undefined,
+    });
+    const sourceIds = new Set(plan.steps.map((s) => s.sourceId));
+    expect(sourceIds.has("zoom")).toBe(true);
+    expect(sourceIds.has("fathom")).toBe(true);
+    expect(sourceIds.has("commas")).toBe(false);
+    expect(sourceIds.has("gmail")).toBe(false);
   });
 
   it("includes a drafted response only when asked to draft", () => {

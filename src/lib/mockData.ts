@@ -1,24 +1,27 @@
 import type { Chat, CreditsState, PageContext, SourceInfo, SuggestedCapability } from "./types";
 
 /**
- * Hand-authored mock data for the UI foundation pass. No backend, no LLM, no MCP — see
- * docs/active-context.md for what's mocked vs. real. Kept internally consistent with the
- * old commas-ai-copilot prototype's dispute scenario (Sarah Johnson, #2481, $499,
- * "Product not received") so a future phase can extend it rather than replace it.
+ * Hand-authored mock data for the chat/agent surfaces. No backend, no LLM, no MCP — see
+ * docs/active-context.md for what's mocked vs. real. The dispute story matches
+ * src/lib/disputeData.ts (ported from commas-ai-copilot): Sarah Johnson, Dispute #2481,
+ * $499 Pro Coaching Program, purchased Aug 2 2026, disputed Aug 9, evidence due Aug 13.
+ *
+ * Source list per Commas CPO (external OAuth-style integrations for off-platform
+ * fulfillment): Google Calendar, Zoom, Fathom, Gmail, CRM. Do not invent more.
  */
 
 export const SOURCES: SourceInfo[] = [
   {
     id: "commas",
     name: "Commas",
-    description: "Products, customers, transactions, subscriptions, and discount codes.",
+    description: "Products, customers, transactions, subscriptions, and disputes.",
     connection: "connected",
     isPrimary: true,
   },
   {
-    id: "fathom",
-    name: "Fathom",
-    description: "Call recordings and AI summaries from customer calls.",
+    id: "google-calendar",
+    name: "Google Calendar",
+    description: "Scheduled sessions, invitations, and attendance.",
     connection: "connected",
   },
   {
@@ -28,23 +31,38 @@ export const SOURCES: SourceInfo[] = [
     connection: "connected",
   },
   {
-    id: "google-meet",
-    name: "Google Meet",
-    description: "Calendar-linked meeting records and attendance.",
+    id: "fathom",
+    name: "Fathom",
+    description: "Call recordings and AI summaries from customer calls.",
+    connection: "connected",
+  },
+  {
+    id: "gmail",
+    name: "Gmail",
+    description: "Email threads with your customers.",
     connection: "not_connected",
   },
   {
-    id: "clickfunnels",
-    name: "ClickFunnels",
-    description: "Funnel and order data — page views, opt-ins, checkout steps.",
+    id: "crm",
+    name: "CRM",
+    description: "Your CRM's contact records and deal history.",
     connection: "not_connected",
   },
 ];
+
+/** Default per-chat scope: every currently connected source. */
+export const DEFAULT_ENABLED_SOURCES = ["commas", "google-calendar", "zoom", "fathom"] as const;
 
 export const DISPUTE_CONTEXT: PageContext = {
   kind: "dispute",
   id: "2481",
   label: "Dispute #2481 — Sarah Johnson",
+};
+
+export const DASHBOARD_CONTEXT: PageContext = {
+  kind: "dashboard",
+  id: "dashboard",
+  label: "Dashboard",
 };
 
 export const INITIAL_CREDITS: CreditsState = {
@@ -53,34 +71,38 @@ export const INITIAL_CREDITS: CreditsState = {
 };
 
 export const SUGGESTED_CAPABILITIES: SuggestedCapability[] = [
+  { id: "sales-summary", label: "Summarize my sales", prompt: "Summarize my sales this month" },
+  { id: "find-customer", label: "Look up a customer", prompt: "Look up customer sarah.johnson@email.com" },
+  { id: "analyze-disputes", label: "Analyze my disputes", prompt: "Analyze my disputes" },
   {
-    id: "sales-summary",
-    label: "Summarize my sales this month",
-    prompt: "Give me a summary of my sales this month",
+    id: "respond-customer",
+    label: "Help me respond to a customer",
+    prompt: "Help me respond to a customer",
   },
   {
-    id: "top-discounts",
-    label: "Which discount codes get used the most?",
-    prompt: "Which discount codes have been used the most?",
+    id: "cross-apps",
+    label: "Find information across my connected apps",
+    prompt: "Find information across my connected apps",
   },
+];
+
+export const DASHBOARD_SUGGESTED_CAPABILITIES: SuggestedCapability[] = [
   {
-    id: "find-customer",
-    label: "Look up a customer",
-    prompt: "Look up customer sarah.johnson@example.com and show her purchase history",
+    id: "revenue-drop",
+    label: "Help me understand why revenue dropped this month",
+    prompt: "Help me understand why revenue dropped this month",
   },
+  { id: "sales-summary", label: "Summarize my sales", prompt: "Summarize my sales this month" },
+  { id: "analyze-disputes", label: "Analyze my disputes", prompt: "Analyze my disputes" },
   {
-    id: "dispute-help",
-    label: "Help me respond to my open dispute",
-    prompt: "Help me respond to my open dispute",
+    id: "cross-apps",
+    label: "Find information across my connected apps",
+    prompt: "Find information across my connected apps",
   },
 ];
 
 export const DISPUTE_SUGGESTED_CAPABILITIES: SuggestedCapability[] = [
-  {
-    id: "investigate",
-    label: "Investigate this dispute",
-    prompt: "Investigate this dispute",
-  },
+  { id: "resolve", label: "Help me resolve this dispute", prompt: "Help me resolve this dispute" },
   {
     id: "draft-response",
     label: "Draft an evidence response",
@@ -147,7 +169,8 @@ export const SEED_CHATS: Chat[] = [
         text:
           "This month you've done **$18,420** across 62 transactions — up 12% from last month. " +
           "**Pro Coaching Program** is your top seller ($9,800), followed by **1:1 Strategy Call** " +
-          "($4,250). 3 refunds totaling $960 were issued, and 1 dispute is currently open (#2481).",
+          "($4,250). 3 refunds totaling $960 were issued, and 1 dispute is currently open " +
+          "(#2481, evidence due August 13).",
         ts: hoursAgo(3),
         toolSummary: [
           { sourceId: "commas", label: "Transactions", ok: true },

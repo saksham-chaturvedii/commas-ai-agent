@@ -1,11 +1,13 @@
 # Commas AI Agent — Active Context
 
-**Last updated:** 2026-08-21 · **Updated by:** Claude (P0/P1 UI review-fix session)
+**Last updated:** 2026-08-21 · **Updated by:** Claude (Commas-foundation UI migration session)
 
-> **UI foundation is implemented and the P0/P1 findings from the first UI review are fixed.**
-> The app runs (`npm run dev`), typechecks, lints, builds, and has a passing test suite (14
-> tests). This is chat/agent **UI only** — see "What Remains Mocked" below. No backend, agent
-> loop, or MCP exists yet.
+> **The UI is now built ON the commas-ai-copilot visual foundation** (see "Commas Foundation
+> Migration" below) — full ported shell, real Resolution Center + Dispute Detail, and the
+> agent panel as the evolution of the old inline copilot. Sources corrected to the CPO's
+> connector list (Google Calendar, Zoom, Fathom, Gmail, CRM). The app runs, typechecks,
+> lints, builds, and has a passing test suite (16 tests). Still chat/agent **UI only** — no
+> backend, agent loop, or MCP exists yet.
 
 > **Specification set now exists:** `PROTOTYPE_SPEC.md` (product + UX + agent behavior +
 > demo flows), `ARCHITECTURE.md` (system design + event contract + request/response loop),
@@ -367,6 +369,90 @@ here to avoid drift; re-run a review pass to get current line references). None 
 in this pass. Also unchanged: the mock-engine-vs-real-agent boundary — every fix above is
 UI-layer only and survives the eventual Phase 2–3 backend swap.
 
+# Commas Foundation Migration (2026-08-21, after the review-fix pass)
+
+Direction correction from the user: the AI Agent UI was "visually and structurally too
+generic" — a generic chat sidebar in a Commas-looking dashboard. The corrected intent:
+**`commas-ai-copilot` is the visual/interaction foundation; we are evolving the Commas AI
+Copilot experience into the Commas AI Agent.** This pass executed that migration.
+
+## What was ported from `commas-ai-copilot` (copied/adapted, still standalone)
+
+- **Shell layout**: the padded gradient frame (`app-shell-bg` + `min-[992px]` padding), glass
+  `Sidebar` (full version: logo tile, Home/Billing/Growth/Wallet/Resolution Center nav + new
+  Chat entry, divider, installed-app tiles, settings/account cluster) and glass `TopNav`
+  (org pill + Sparkles "Search apps..." field + icon cluster) — old versions replaced my
+  generic simplified ones. Billing/Growth/Wallet are visual-only (non-functional, as in the
+  old prototype).
+- **CSS recipes** restored verbatim into `index.css`: `filter-pill`, `toolbar-search`,
+  `btn-toolbar`, `textarea-shell`, `detail-row`, the full inset-shadow `main-surface`,
+  original `content-card` metrics.
+- **Resolution Center list** (`src/components/resolution/ResolutionCenter.tsx`): tabs
+  (Needs response / In review / All / Lost / Won), filter pills with working
+  Reason/Amount/Date popovers, toolbar search + Export, the dispute table row. The old
+  `phase` prop was dropped (no submitted state in this repo).
+- **Dispute Detail** (`resolution/DisputeDetail.tsx`): back link, header + meta, manual
+  evidence checklist (6 categories, working `AddEvidenceModal`), "Your response" draft box
+  (Save draft works; Submit disabled — submission is simulated per platform reality), and
+  the Dispute details / Customer / Transaction cards. **The evolution point:** the old
+  "Collect evidence with AI" scripted-copilot button is now **"Investigate with AI"**
+  (same `btn-blue` treatment) and opens the contextual agent panel instead of the old
+  inline scripted flow.
+- Supporting components: `FilterPill`, `ReasonPopover`, `SimpleFilterPopover`,
+  `PinwheelIcon`, `AddEvidenceModal`, `CardTitle` — all in `src/components/resolution/`.
+- **Dispute dataset** (`src/lib/disputeData.ts`): the old repo's audited August 2026 story
+  (purchase Aug 2 14:32 UTC, access 14:33, 14 logins, 6/12 lessons, dispute Aug 9, due
+  Aug 13, sarah.johnson@email.com). The chat mock engine now tells the SAME story — the
+  earlier February variant is gone.
+
+## Sources corrected (per the CPO's list — do not extend)
+
+Native: **Commas** (primary). External connected sources: **Google Calendar, Zoom, Fathom,
+Gmail, CRM** (vendor-neutral). The previous Google Meet/ClickFunnels set was replaced.
+Google Calendar/Zoom/Fathom mocked as connected; Gmail/CRM connect via the simulated flow.
+`DEFAULT_ENABLED_SOURCES` = all connected. No MCP terminology anywhere in the UI.
+
+## Contextual AI now context-aware by page
+
+- **Dashboard** → floating button opens panel with `DASHBOARD_CONTEXT`; suggestions include
+  "Help me understand why revenue dropped this month" (new mock-engine branch with a
+  structured "What changed" answer). No context chip — the page itself is the context.
+- **Resolution Center → Dispute Detail** → "Investigate with AI" or floating button opens
+  the panel with `DISPUTE_CONTEXT` (chip + dispute suggestions, first one now "Help me
+  resolve this dispute"). Investigation answer sources each timeline/evidence item to
+  Commas/Fathom/Zoom/Google Calendar/Gmail/CRM per enabled scope.
+- **RC list** → floating button opens a generic (no-context) panel chat.
+- Global suggestions revised to the requested set: Summarize my sales · Look up a customer ·
+  Analyze my disputes · Help me respond to a customer · Find information across my connected
+  apps (each backed by a real mock-engine branch).
+
+## Layout integration
+
+The AI panel is now a **sibling `main-surface` column** inside the padded shell (gap-2.5 from
+the page surface) — Notion-style docking with Commas materials; the underlying page stays
+visible. Below `lg` it still overlays (P0 fix preserved). Chat view and Dashboard are also
+`main-surface` pages now. `ResolutionCenterPage.tsx` (placeholder) was deleted; RC routing is
+`list | detail` inside App.
+
+## Verification (this pass)
+
+- typecheck ✓, lint ✓ (one ported ternary-statement fixed), **16/16 tests** (added
+  revenue-drop and cross-app-scoping engine tests; updated source ids/labels), build ✓
+  (222KB JS / 34KB CSS pre-gzip).
+- Headless-Chromium walkthrough, zero console errors: dashboard → panel → revenue-drop
+  answer; RC list (tabs/filter popover) → dispute detail → Investigate with AI → full
+  sourced investigation; sources menu (checkmarks, Not-connected states) → Connected apps
+  modal; Chat view → continue seed conversation → New chat empty state with the five
+  suggestions. Screenshots confirm visual parity with the old prototype's shell.
+
+## What remains after this pass
+
+Unchanged scope boundaries: no real agent/LLM/MCP (mock engine only), no OAuth (simulated
+connect), no write/approval flow, no persistence, no committed e2e suite. The old repo's
+`SourceView` (evidence source-record pages) and `EvidenceCopilot` scripted cards were
+deliberately NOT ported — the agent panel supersedes the copilot cards, and source-record
+inspection is a candidate for a later pass if evidence traceability returns as a requirement.
+
 # Current Repository State
 
 - `docs/` — full spec set (`PROTOTYPE_SPEC.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,
@@ -396,6 +482,11 @@ UI-layer only and survives the eventual Phase 2–3 backend swap.
   found 1 P0 + 6 P1 issues; all fixed same session — see "UI Review Fix Pass" below. Verified:
   `npm run typecheck`, `npm run lint`, `npm test` (14/14), `npm run build` all pass; re-ran
   the app in headless Chromium across 4 viewport widths with zero console errors.
+- **Commas foundation migration** (2026-08-21) — ported the commas-ai-copilot shell,
+  Resolution Center, and Dispute Detail; corrected sources to the CPO's connector list;
+  contextual AI per page; agent panel as sibling main-surface — see "Commas Foundation
+  Migration" below. Verified: typecheck/lint/16 tests/build + full browser walkthrough,
+  zero console errors.
 
 # In Progress
 
@@ -408,9 +499,9 @@ UI-layer only and survives the eventual Phase 2–3 backend swap.
 - **Backend, agent loop, LLM calls, MCP client, mock or real MCP servers.** Everything
   agent-shaped in the UI is driven by `src/lib/mockEngine.ts`, a pattern-matched script — see
   "What Remains Mocked."
-- **Full Resolution Center** (list/filters/evidence-copilot port from `commas-ai-copilot`) —
-  `ResolutionCenterPage.tsx` is a deliberately minimal placeholder (one dispute card), not
-  the full page. IMPLEMENTATION_PLAN.md Phase 1.
+- ~~Full Resolution Center~~ **Done in the Commas Foundation Migration** (list + detail
+  ported). Still not ported from the old repo: `SourceView` (per-evidence source-record
+  pages) and the scripted `EvidenceCopilot` cards (superseded by the agent panel).
 - **Write-action / approval-card flow** (spec §4.5–4.6) — the mock engine only performs
   reads; no write tool, no approval card UI exists yet.
 - **Persistence** — chat/credits/sources state lives only in React context; a page reload

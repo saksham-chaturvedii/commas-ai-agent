@@ -6,7 +6,12 @@
 
 export type ViewId = "dashboard" | "resolution-center" | "chat";
 
-export type SourceId = "commas" | "fathom" | "zoom" | "google-meet" | "clickfunnels";
+/**
+ * One native source (Commas) plus the external connected sources named by Commas' CPO for
+ * off-platform fulfillment: Google Calendar, Zoom, Fathom, Gmail, CRM (vendor-neutral).
+ * Do not add integrations beyond this list.
+ */
+export type SourceId = "commas" | "google-calendar" | "zoom" | "fathom" | "gmail" | "crm";
 
 export type SourceConnectionState = "connected" | "not_connected" | "connecting";
 
@@ -49,7 +54,7 @@ export interface ChatMessage {
 }
 
 export interface PageContext {
-  kind: "dispute";
+  kind: "dispute" | "dashboard";
   id: string;
   label: string;
 }

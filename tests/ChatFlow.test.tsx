@@ -34,7 +34,7 @@ describe("chat flow (mocked engine, no real agent)", () => {
       </ChatStoreProvider>,
     );
     expect(screen.getByText("How can I help you today?")).toBeInTheDocument();
-    expect(screen.getByText("Summarize my sales this month")).toBeInTheDocument();
+    expect(screen.getByText("Summarize my sales")).toBeInTheDocument();
   });
 
   it("clicking a suggestion runs the mock engine and renders progress then an answer", async () => {
@@ -44,10 +44,10 @@ describe("chat flow (mocked engine, no real agent)", () => {
       </ChatStoreProvider>,
     );
 
-    fireEvent.click(screen.getByText("Summarize my sales this month"));
+    fireEvent.click(screen.getByText("Summarize my sales"));
 
     // user message appears immediately
-    expect(screen.getByText("Give me a summary of my sales this month")).toBeInTheDocument();
+    expect(screen.getByText("Summarize my sales this month")).toBeInTheDocument();
 
     // progress steps play out over time
     await act(async () => {

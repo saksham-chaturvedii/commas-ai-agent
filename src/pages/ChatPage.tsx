@@ -29,7 +29,7 @@ export function ChatPage({
   if (!activeChat) return null;
 
   return (
-    <div className="flex-1 min-h-0 flex">
+    <div className="main-surface flex-1 min-h-0 flex overflow-hidden">
       <ChatHistoryList activeChatId={activeChat.id} onSelect={onSelectChat} />
       <div className="flex-1 min-h-0 flex flex-col">
         <div className="flex items-center justify-end h-12 px-4 border-b border-black/[0.06] shrink-0">
