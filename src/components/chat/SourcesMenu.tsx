@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { SlidersHorizontal, Link2 } from "lucide-react";
+import { SlidersHorizontal, Link2, Check } from "lucide-react";
 import type { Chat } from "../../lib/types";
 import { useChatStore } from "../../hooks/useChatStore";
 import { SourceIcon } from "./SourceIcon";
@@ -63,7 +63,11 @@ export function SourcesMenu({ chat }: { chat: Chat }) {
                     <SourceIcon sourceId={source.id} size={16} />
                     <span className="flex-1 text-[13px] font-medium">{source.name}</span>
                     {!connected && <span className="text-[11px] text-[var(--color-text-quaternary)]">Not connected</span>}
-                    {connected && <div className="checkbox-box" data-checked={enabled} />}
+                    {connected && (
+                      <div className="checkbox-box" data-checked={enabled}>
+                        {enabled && <Check size={11} strokeWidth={3} className="text-white" />}
+                      </div>
+                    )}
                   </button>
                 </li>
               );

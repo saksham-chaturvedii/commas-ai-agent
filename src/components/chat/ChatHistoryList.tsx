@@ -21,8 +21,11 @@ export function ChatHistoryList({
 }) {
   const { chats, createChat, deleteChat } = useChatStore();
 
+  // An empty chat only stays visible while it's the active one — createChat() already
+  // dedupes so there's at most one, but this keeps a stale empty chat from lingering in the
+  // list if selection moves elsewhere.
   const standaloneChats = chats
-    .filter((c) => !c.context)
+    .filter((c) => !c.context && (c.messages.length > 0 || c.id === activeChatId))
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
   const groups: Record<string, typeof standaloneChats> = { Today: [], Yesterday: [], Earlier: [] };

@@ -1,10 +1,11 @@
 # Commas AI Agent — Active Context
 
-**Last updated:** 2026-08-21 · **Updated by:** Claude (UI foundation implementation session)
+**Last updated:** 2026-08-21 · **Updated by:** Claude (P0/P1 UI review-fix session)
 
-> **UI foundation is now implemented.** The app runs (`npm run dev`), typechecks, lints, and
-> has a passing test suite. This is chat/agent **UI only** — see "What Remains Mocked" below.
-> No backend, agent loop, or MCP exists yet.
+> **UI foundation is implemented and the P0/P1 findings from the first UI review are fixed.**
+> The app runs (`npm run dev`), typechecks, lints, builds, and has a passing test suite (14
+> tests). This is chat/agent **UI only** — see "What Remains Mocked" below. No backend, agent
+> loop, or MCP exists yet.
 
 > **Specification set now exists:** `PROTOTYPE_SPEC.md` (product + UX + agent behavior +
 > demo flows), `ARCHITECTURE.md` (system design + event contract + request/response loop),
@@ -278,9 +279,10 @@ scaffold placeholders (`src/agent/`, `src/llm/`, `src/mcp/`, `src/connectors/`,
 
 ## Known issues
 
-- No responsive/mobile layout — `Sidebar` hides below 900px, `RightPanel` hides below 1024px
-  (Tailwind `lg:`), matching the reference screenshots' desktop-only scope but not tested or
-  designed for narrower viewports.
+- ~~No responsive/mobile layout~~ **Superseded by the UI Review Fix Pass below:** `Sidebar` no
+  longer hides at any width and `RightPanel` now overlays (instead of vanishing) below
+  `lg`. Still no true mobile/touch layout — this only fixes the dead-end/no-nav failure
+  modes at tablet-ish widths (800–1023px); phone-width layouts remain untested.
 - `resetDemo()` restores seed data wholesale, discarding any chats created during the demo
   session — intentional for a demo reset control, but worth knowing before relying on it
   mid-demo.
@@ -292,6 +294,78 @@ scaffold placeholders (`src/agent/`, `src/llm/`, `src/mcp/`, `src/connectors/`,
   script (`node` + `playwright`) run from job scratch space, not saved into the repo.
 - `ChatHistoryList` delete affordance is hover-only (no touch-friendly alternative) —
   acceptable for a desktop-only prototype pass, flagged for later.
+
+# UI Review Fix Pass (2026-08-21)
+
+A visual review of the UI Foundation Pass against the Notion AI / Claude Desktop / Commas
+reference screenshots (`docs/references/`) found 1 P0 and 6 P1 issues. All were fixed this
+session; no P2 (polish) items were touched, and no unrelated parts were redesigned.
+
+## Fixes applied
+
+- **P0 — right panel dead end below 1024px.** `RightPanel.tsx`'s `<aside>` was `hidden
+  lg:flex`, so between 900–1023px the floating AI button hid itself on click and nothing
+  appeared — no panel, no way back short of resizing. Fixed by making the aside always
+  render and switching to a `max-lg:fixed` overlay (right-docked, `z-40`, drop shadow) below
+  the `lg` breakpoint instead of `hidden`. Verified: panel visible and functional at 1000px.
+- **P1 — right panel duplicated the Chat view.** Opening the panel then navigating to Chat
+  showed two parallel conversations (two composers, two credit pills). `App.tsx` now gates
+  `RightPanel`'s `open` prop on `view !== "chat"` and closes the panel via a `useEffect` on
+  `view` whenever it becomes `"chat"` (covers Sidebar clicks, not just the panel's own
+  "open in full chat" button, which already did this explicitly). Verified: 0 `<aside>`
+  elements render on the Chat view.
+- **P1 — "New chat" spawned unlimited empty chats.** `useChatStore.tsx`'s `createChat` now
+  looks for an existing empty chat with the same context signature (inside the `setChats`
+  updater, so it reads current state safely) and reuses it instead of always creating a new
+  one; `ChatHistoryList.tsx` also hides empty chats that aren't the active selection, as a
+  second guard. Verified: 3 rapid "New chat" clicks produce exactly one chat row.
+- **P1 — source-toggle checkboxes had no checkmark.** `SourcesMenu.tsx`'s `checkbox-box` div
+  rendered as a solid black square with no glyph in either state. Added a `lucide-react`
+  `Check` icon inside, shown only when `enabled`. Verified visually — white check now visible
+  on enabled sources (Commas, Fathom, Zoom).
+- **P1 — shell looked nothing like Commas.** The app used a flat `#f5f6f8` background with no
+  gradient/glass, unlike every Commas reference screenshot. Copied
+  `commas_bg_draft.webp` from `../commas-ai-copilot/public/` into this repo's `public/`,
+  restored the `.app-shell-bg` recipe in `index.css` (and restored `.glass-card`'s actual
+  translucency/blur, which had been flattened to 90%-opaque with no backdrop-filter and was
+  unused until now), applied `app-shell-bg` to `App.tsx`'s root wrapper, and rewrote
+  `TopNav.tsx`: the org-switcher is now a real `glass-card` pill, and a new non-functional
+  glass search field ("Search apps…") sits where Commas' dashboard has one. The header itself
+  dropped its solid `bg-white/80 border-b` in favor of floating glass elements directly over
+  the gradient, matching `docs/references/commas-dashboard.png`.
+- **P1 — flagship investigation answer was one unstructured paragraph.** `liteMarkdown.tsx`
+  only supported `**bold**` and paragraph breaks; spec §5.5 calls for a case summary,
+  timeline, itemized evidence, and a labeled draft. Extended the renderer to also handle
+  `### Heading` blocks (→ `<h4>`) and consecutive `- item` lines (→ `<ul><li>`), then rewrote
+  `mockEngine.ts`'s dispute-investigation answer into four blocks — Case summary / Timeline /
+  Evidence / Drafted response — each list item naming its source, still respecting the
+  per-enabled-source conditionals and the "couldn't check X" note. Verified visually: distinct
+  TIMELINE and EVIDENCE headings with bulleted, source-attributed items.
+- **P1 — no navigation below 900px.** `Sidebar.tsx` was `hidden min-[900px]:flex` with no
+  fallback, stranding the user with zero navigation at smaller widths. Changed to always
+  `flex` (the rail is only 48px wide). Verified nav visible at 1000px, 900px, and 800px.
+
+## Verification
+
+- `npm run typecheck` — pass (0 errors).
+- `npm run lint` — pass (0 errors/warnings).
+- `npm test` — **14/14 passing** (up from 10; added `tests/liteMarkdown.test.tsx` for the new
+  heading/list rendering, per the review's own recommendation).
+- `npm run build` — pass (190KB JS / 26KB CSS gzipped, no regression from the prior 188KB/27KB).
+- Ran the app in headless Chromium across four viewport widths (1400px, 1000px, 900px, 800px)
+  and drove every affected flow end to end (dashboard, Resolution Center → Investigate with
+  AI → full multi-source investigation with structured answer, Sources menu, spam-clicking
+  New Chat, navigating to Chat with the panel open, floating button at narrow widths) — zero
+  console errors throughout. Screenshots confirm each fix visually (gradient/glass shell,
+  checkmarks, structured TIMELINE/EVIDENCE sections, no duplicate panel, no duplicate empty
+  chats, panel overlay at 1000px, nav present down to 800px).
+
+## Not touched (explicitly out of scope for this pass)
+
+All 14 P2 polish items from the review remain open — see the review notes (not reproduced
+here to avoid drift; re-run a review pass to get current line references). None are asked for
+in this pass. Also unchanged: the mock-engine-vs-real-agent boundary — every fix above is
+UI-layer only and survives the eventual Phase 2–3 backend swap.
 
 # Current Repository State
 
@@ -314,10 +388,14 @@ scaffold placeholders (`src/agent/`, `src/llm/`, `src/mcp/`, `src/connectors/`,
 - Technical reconnaissance of commasdocs.com, the old prototype, and this repo (verified by
   direct fetch/inspection on 2026-08-21; findings recorded in this file).
 - Full specification set: `PROTOTYPE_SPEC.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`.
-- **UI foundation implementation** (2026-08-21) — see the dedicated section below. Verified:
+- **UI foundation implementation** (2026-08-21) — see "UI Foundation Pass" below. Verified:
   `npm run typecheck`, `npm run lint`, `npm test` (10/10), and `npm run build` all pass;
   the app was run in a real headless-Chromium browser and visually inspected across all
   required surfaces with zero console errors.
+- **UI review + P0/P1 fix pass** (2026-08-21) — a review against the reference screenshots
+  found 1 P0 + 6 P1 issues; all fixed same session — see "UI Review Fix Pass" below. Verified:
+  `npm run typecheck`, `npm run lint`, `npm test` (14/14), `npm run build` all pass; re-ran
+  the app in headless Chromium across 4 viewport widths with zero console errors.
 
 # In Progress
 

@@ -26,7 +26,7 @@ export function RightPanel({
   if (!open || !chat) return null;
 
   return (
-    <aside className="hidden lg:flex flex-col w-[380px] shrink-0 h-full border-l border-black/[0.06] bg-white">
+    <aside className="flex flex-col w-[380px] shrink-0 h-full border-l border-black/[0.06] bg-white max-lg:fixed max-lg:right-0 max-lg:top-0 max-lg:bottom-0 max-lg:z-40 max-lg:shadow-[-8px_0_30px_rgba(0,0,0,0.12)]">
       <div className="flex items-center gap-2 h-14 px-3 border-b border-black/[0.06] shrink-0">
         <AgentMark size={16} />
         <span className="text-[13px] font-semibold text-[var(--color-text-primary)] truncate flex-1">

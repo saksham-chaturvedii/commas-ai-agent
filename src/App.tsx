@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChatStoreProvider, useChatStore } from "./hooks/useChatStore";
 import type { PageContext, ViewId } from "./lib/types";
 import { DISPUTE_CONTEXT } from "./lib/mockData";
@@ -32,6 +32,14 @@ function AppShell() {
 
   const closePanel = () => setPanelOpen(false);
 
+  // The right panel is scoped to "other pages" (spec §2.5) — the Chat view has its own full
+  // conversation surface, so showing the panel there would duplicate the composer/credits and
+  // let two chats run side by side. Closing on navigation-into-chat covers every path (Sidebar
+  // click, openFullChatFromPanel already does this explicitly too).
+  useEffect(() => {
+    if (view === "chat") setPanelOpen(false);
+  }, [view]);
+
   const openFullChatFromPanel = () => {
     if (!panelChatId) return;
     setChatPageActiveId(panelChatId);
@@ -40,7 +48,7 @@ function AppShell() {
   };
 
   return (
-    <div className="flex h-full w-full">
+    <div className="app-shell-bg flex h-full w-full">
       <Sidebar active={view} onNavigate={setView} />
       <div className="flex-1 min-w-0 flex flex-col h-full">
         <TopNav />
@@ -52,7 +60,12 @@ function AppShell() {
             )}
             {view === "chat" && <ChatPage activeChatId={chatPageActiveId} onSelectChat={setChatPageActiveId} />}
           </div>
-          <RightPanel open={panelOpen} chatId={panelChatId} onClose={closePanel} onOpenFullChat={openFullChatFromPanel} />
+          <RightPanel
+            open={panelOpen && view !== "chat"}
+            chatId={panelChatId}
+            onClose={closePanel}
+            onOpenFullChat={openFullChatFromPanel}
+          />
         </div>
       </div>
 

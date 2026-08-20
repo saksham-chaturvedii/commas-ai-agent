@@ -71,19 +71,34 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const createChat = useCallback((context?: PageContext) => {
-    const id = newId("chat");
-    const ts = new Date().toISOString();
-    const chat: Chat = {
-      id,
-      title: context ? context.label : "New chat",
-      createdAt: ts,
-      updatedAt: ts,
-      enabledSources: ["commas", "fathom", "zoom"],
-      context,
-      messages: [],
-    };
-    setChats((prev) => [chat, ...prev]);
-    return id;
+    // Reuse an already-empty chat with the same context signature instead of spawning a new
+    // one — repeated "New chat" clicks (or repeated panel opens) used to pile up empty rows in
+    // history. `resultId` is set synchronously inside the updater (React runs it immediately,
+    // only the re-render is deferred), so it's safe to read right after.
+    let resultId = "";
+    const matchesContext = (c: Chat) => (context ? c.context?.kind === context.kind && c.context?.id === context.id : !c.context);
+
+    setChats((prev) => {
+      const existing = prev.find((c) => c.messages.length === 0 && matchesContext(c));
+      if (existing) {
+        resultId = existing.id;
+        return prev;
+      }
+      const id = newId("chat");
+      const ts = new Date().toISOString();
+      const chat: Chat = {
+        id,
+        title: context ? context.label : "New chat",
+        createdAt: ts,
+        updatedAt: ts,
+        enabledSources: ["commas", "fathom", "zoom"],
+        context,
+        messages: [],
+      };
+      resultId = id;
+      return [chat, ...prev];
+    });
+    return resultId;
   }, []);
 
   const deleteChat = useCallback(

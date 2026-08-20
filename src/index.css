@@ -64,8 +64,19 @@ body {
 
 /* ---- shared recipe utilities (ported from commas-ai-copilot DESIGN.md) ---- */
 
+.app-shell-bg {
+  min-height: 100dvh;
+  background-color: #ffffff;
+  background-image: url("/commas_bg_draft.webp");
+  background-size: cover;
+  background-position: center top;
+  background-repeat: no-repeat;
+}
+
 .glass-card {
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.42);
+  backdrop-filter: blur(24px) saturate(1.25);
+  -webkit-backdrop-filter: blur(24px) saturate(1.25);
   border: 1px solid rgba(255, 255, 255, 0.6);
   border-radius: 12px;
   box-shadow:

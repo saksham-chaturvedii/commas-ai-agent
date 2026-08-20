@@ -148,6 +148,10 @@ export function planMockRun(input: {
 
     const steps = [...allSteps, ...connectedAppSteps];
 
+    const hasFathom = connectedAppSteps.some((s) => s.sourceId === "fathom");
+    const hasZoom = connectedAppSteps.some((s) => s.sourceId === "zoom");
+    const hasClickfunnels = connectedAppSteps.some((s) => s.sourceId === "clickfunnels");
+
     const skippedNote =
       skipped.length > 0
         ? ` I couldn't check ${skipped.map((id) => CONNECTED_APP_LABELS[id]).join(", ")} — ${
@@ -155,31 +159,42 @@ export function planMockRun(input: {
           } turned off for this chat.`
         : "";
 
-    const investigationSummary =
-      "**Dispute #2481 — $499, \"Product not received\"**\n\n" +
-      "Sarah Johnson purchased the Pro Coaching Program on Feb 3 and was granted immediate " +
-      "portal access. Activity logs show 4 logins between Feb 3–7." +
-      (connectedAppSteps.some((s) => s.sourceId === "fathom")
-        ? " Fathom shows a 42-minute onboarding call on Feb 4 and a coaching session on Feb 6."
-        : "") +
-      (connectedAppSteps.some((s) => s.sourceId === "zoom")
-        ? " Zoom's meeting log corroborates both sessions with matching join times."
-        : "") +
-      (connectedAppSteps.some((s) => s.sourceId === "clickfunnels")
-        ? " ClickFunnels shows a completed checkout with no chargebacks on file."
-        : "") +
+    const caseSummary =
+      "### Case summary\n\n" +
+      "**Dispute #2481 — $499, \"Product not received\"**. Sarah Johnson purchased the Pro " +
+      "Coaching Program on Feb 3 and was granted immediate portal access." +
       skippedNote;
 
+    const timelineItems = [
+      "- **Feb 3** — Purchase completed, portal access granted (Commas)",
+      "- **Feb 3–7** — 4 logins recorded (Commas activity logs)",
+    ];
+    if (hasFathom) timelineItems.push("- **Feb 4** — 42-minute onboarding call (Fathom)");
+    if (hasZoom) timelineItems.push("- **Feb 4** — Matching Zoom join time recorded (Zoom)");
+    if (hasFathom) timelineItems.push("- **Feb 6** — Coaching session call (Fathom)");
+    if (hasZoom) timelineItems.push("- **Feb 6** — Matching Zoom join time recorded (Zoom)");
+    if (hasClickfunnels) timelineItems.push("- **Feb 3** — Checkout completed, no prior chargebacks (ClickFunnels)");
+    const timeline = "### Timeline\n\n" + timelineItems.join("\n");
+
+    const evidenceItems = ["- Login activity: 4 sessions between Feb 3–7 (Commas)"];
+    if (hasFathom) evidenceItems.push("- Call recordings: onboarding (Feb 4) and coaching session (Feb 6) (Fathom)");
+    if (hasZoom) evidenceItems.push("- Meeting log corroborating both sessions (Zoom)");
+    if (hasClickfunnels) evidenceItems.push("- Completed order with no prior chargebacks (ClickFunnels)");
+    const evidence = "### Evidence\n\n" + evidenceItems.join("\n");
+
     const draft =
-      "\n\n**Drafted response:** \"The customer received full access to the Pro Coaching " +
-      "Program immediately upon purchase and logged in 4 times over the following week, " +
-      "including two live coaching sessions on Feb 4 and Feb 6. Login timestamps, session " +
-      "recordings, and calendar records are attached as evidence.\" " +
-      "You can copy this draft — nothing is submitted automatically.";
+      "### Drafted response\n\n" +
+      "\"The customer received full access to the Pro Coaching Program immediately upon " +
+      "purchase and logged in 4 times over the following week, including two live coaching " +
+      "sessions on Feb 4 and Feb 6. Login timestamps, session recordings, and calendar " +
+      "records are attached as evidence.\" You can copy this draft — nothing is submitted " +
+      "automatically.";
+
+    const answer = [caseSummary, timeline, evidence, ...(wantsDraft ? [draft] : [])].join("\n\n");
 
     return {
       steps,
-      answer: investigationSummary + (wantsDraft ? draft : ""),
+      answer,
       toolSummary: summarize(steps),
     };
   }
