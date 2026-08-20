@@ -1,6 +1,11 @@
 # Commas AI Agent — Active Context
 
-**Last updated:** 2026-08-21 · **Updated by:** Claude (technical reconnaissance session)
+**Last updated:** 2026-08-21 · **Updated by:** Claude (specification session — recon earlier same day)
+
+> **Specification set now exists:** `PROTOTYPE_SPEC.md` (product + UX + agent behavior +
+> demo flows), `ARCHITECTURE.md` (system design + event contract + request/response loop),
+> `IMPLEMENTATION_PLAN.md` (Phases 0–6 with acceptance criteria and tests). Those three are
+> the working spec; this file tracks state and decisions.
 
 > **Read this file first in any new session.** It is the persistent source of truth for this
 > repository. Update it after any meaningful implementation work. Everything below is labeled
@@ -61,7 +66,8 @@ real money movement, multi-tenant auth, production hardening.
 - **MCP client** = the side that *calls* those tools (our agent backend — or Anthropic's API
   acting on our behalf via the MCP connector).
 
-## Intended architecture (recommended, not yet confirmed by the user)
+## Intended architecture (adopted into `ARCHITECTURE.md`, 2026-08-21 — that file is now the
+authoritative, more detailed version of this sketch)
 
 ```
 ┌──────────────────────────── Browser (React UI) ────────────────────────────┐
@@ -187,20 +193,27 @@ fulfillment — see `../commas-ai-copilot/active-context.md` §5.)
   READMEs, no code), `tests/`, `public/`, minimal `package.json` (no deps), `.gitignore`.
 - `docs/references/` — 10 UX reference screenshots (Notion AI ×4, Notion MCP ×2, Commas
   dashboard/integrations/Resolution Center, Claude Desktop).
-- `docs/product-spec.md`, `docs/architecture.md`, `docs/implementation-plan.md` — stubs.
-- Git: local repo on `main`, 2 commits, **no remote**.
+- **Specification set (written, committed):** `docs/PROTOTYPE_SPEC.md`,
+  `docs/ARCHITECTURE.md`, `docs/IMPLEMENTATION_PLAN.md` (renamed from the earlier lowercase
+  stubs — note macOS is case-insensitive, so never create a second file differing only in
+  case).
+- Git: local repo on `main`, **no remote**.
 
 # Completed
 
 - Repo scaffold + reference screenshots (committed).
-- Technical reconnaissance of commasdocs.com, the old prototype, and this repo (this file is
-  the record; verified by direct fetch/inspection on 2026-08-21).
+- Technical reconnaissance of commasdocs.com, the old prototype, and this repo (verified by
+  direct fetch/inspection on 2026-08-21; findings recorded in this file).
+- Full specification set: `PROTOTYPE_SPEC.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`
+  (written against the recon; committed).
 
-Nothing else. No application code exists.
+No application code exists.
 
 # In Progress
 
-- Nothing (recon just finished; implementation not started).
+- Nothing. **Next up: `IMPLEMENTATION_PLAN.md` Phase 0 (workspace scaffold)** — blocked only
+  on the sign-off items in Open Questions 1–2 (or explicit user go-ahead, which implies
+  accepting the recorded defaults).
 
 # Not Implemented
 
@@ -219,26 +232,49 @@ Resolution Center flow, tests, deployment.
 - **Recon method decisions:** commasdocs.com is a single-page JS-rendered site — WebFetch
   truncates it; fetch raw HTML via curl and extract (content is embedded in script payloads).
 
-The following are **recommended but awaiting user sign-off** (see Open Questions):
-frontend = React 18 + Vite + Tailwind v4 (matching old prototype for visual reuse);
-backend = small Node/TS server (Hono or Express) with SSE; LLM = Anthropic TS SDK
-(`@anthropic-ai/sdk`), model `claude-opus-5`, adaptive thinking, tool-runner loop;
-MCP = `@modelcontextprotocol/sdk` self-hosted client, mock-first.
+Decisions adopted into the specification set (2026-08-21; defaults chosen by Claude where
+the user hadn't answered — flagged in Open Questions where an override is still possible):
+
+- **Frontend:** React 18 + Vite + Tailwind v4 + `lucide-react` (visual reuse from old repo).
+- **Backend:** Node 20+ / TypeScript / **Hono**, REST + SSE, single process.
+- **LLM:** `@anthropic-ai/sdk`, model `claude-opus-5`, adaptive thinking, SDK beta
+  tool-runner loop (manual loop as documented fallback), streaming; **real LLM calls**
+  in demo mode, **scripted LLM stub** in all automated tests.
+- **MCP:** `@modelcontextprotocol/sdk` self-hosted client; in-process mock MCP servers
+  (Commas + fathom/zoom/google-meet/clickfunnels); mock-first, with a guarded real-mode
+  config path (`COMMAS_MCP_MODE=real` + `COMMAS_ALLOW_REAL=1`, QA sandbox key only) that no
+  phase builds UI for.
+- **Mock dispute tools are namespaced `commas_*`** (not `fanbasis_*`) because they have no
+  real-platform equivalent — never blur that line.
+- **Persistence:** in-memory store + JSON file snapshot (`data/state.json`, gitignored),
+  behind a `ChatStore` interface.
+- **Credits pricing:** 1/message + 1/read call + 5/write call, backend-metered.
+- **Safety rails:** server-side write-approval gate, iteration cap (12 rounds), run
+  timeout, approval auto-decline after 10 min, unknown tools classified `write`.
+- **Terminology:** user-facing = "Sources" / "Connected apps"; MCP terms only in
+  engineering docs.
+- **Event contract:** the SSE vocabulary in `ARCHITECTURE.md` §9; no CoT, raw prompts, raw
+  payloads, or internal tool names ever cross it.
+- **Testing:** Vitest (unit/integration, stub LLM) + Playwright (e2e, visual baselines);
+  live-model verification via a manual smoke script only.
 
 # Open Questions
 
-1. **Real LLM or scripted?** Recommendation: real Anthropic API calls with mocked tools —
-   that's the point of this prototype vs. the old one. Requires an `ANTHROPIC_API_KEY` and
-   accepts per-demo cost. Needs user confirmation.
-2. **Ever point at the real Commas MCP server?** The Railway remote endpoint works today with
-   a seller API key. Recommendation: mock-only by default, optional "real mode" behind a
-   config flag, QA/sandbox key only. Needs user confirmation (and a key).
-3. **Chat persistence:** in-memory / localStorage vs. SQLite on the backend. Recommendation:
-   backend in-memory + JSON file snapshot (simplest that survives a refresh).
-4. **GitHub:** create a remote for this repo? (None exists; old repo is public.)
-5. Exact write-tool list of the Commas MCP server (docs inconsistent: 11 vs 27 vs 30+).
-6. Whether Commas plans an in-app agent surface of their own (interview said yes, per-org
+1. **Real LLM calls** are now baked into the spec (demo mode) — still needs the user to
+   supply `ANTHROPIC_API_KEY` and accept per-demo cost before Phase 3's live smoke test.
+   Automated tests never need it.
+2. **Real Commas MCP mode** is specced as guarded-optional and deferred; only becomes
+   actionable if the user supplies a QA sandbox key.
+3. **GitHub:** create a remote for this repo? (None exists; old repo is public.) Ask before
+   pushing.
+4. Exact write-tool list of the real Commas MCP server (docs inconsistent: 11 vs 27 vs 30+).
+   Mock write tools follow the documented write *actions*; reconcile if real mode is used.
+5. Whether Commas plans an in-app agent surface of their own (interview said yes, per-org
    sandboxed agents + credits) — relevant for framing, unknowable from docs.
+
+Resolved since recon (defaults adopted into the specs; user may still override): chat
+persistence (in-memory + JSON snapshot), loop mechanism (tool runner), Hono over Express,
+stub-LLM testing strategy, credits pricing, `commas_*` namespacing for mock dispute tools.
 
 # Risks / Blockers
 
@@ -262,26 +298,15 @@ MCP = `@modelcontextprotocol/sdk` self-hosted client, mock-first.
 
 # Next Steps
 
-Recommended implementation order (after Open Questions 1–3 are answered):
+The build order now lives in `IMPLEMENTATION_PLAN.md` (Phases 0–6, each independently
+testable with acceptance criteria). **Next implementation phase: Phase 0 — workspace
+scaffold** (Vite+React+Tailwind frontend, Hono backend with SSE proof, shared types,
+dev/test tooling). Then Phases 1 (shell port) and 2 (mock data + MCP servers) — which may
+run in parallel — then 3 (agent runtime) → 4 (chat UX) → 5 (ambient surfaces + flagship) →
+6 (demo hardening).
 
-1. Stack scaffold: Vite + React + Tailwind frontend; Node/TS backend with SSE; shared types
-   package; wire `npm run dev` for both.
-2. Port/adapt the Commas visual shell + Resolution Center from the old prototype; extend the
-   left nav with the Chat entry.
-3. Mock Commas MCP server (the 11 `fanbasis_*` read tools + mock dispute tools our agent
-   needs + confirmation-gated mock write tools) and mock external connectors (Fathom, Zoom,
-   Google Meet, ClickFunnels) with hand-authored, internally consistent data extending the
-   old repo's dispute scenario.
-4. Agent backend: Anthropic tool-runner loop, MCP client dispatch, progress mapper, SSE
-   endpoint, credits metering.
-5. Chat UX: history, new chat, empty state with suggested actions, composer with
-   connector/source picker, credits display.
-6. Right-side panel, floating button, Resolution Center contextual entry point.
-7. Flagship flow: dispute investigation end to end on mock data.
-8. Playwright e2e for the happy path; then update this file.
-
-Write `docs/product-spec.md` and `docs/architecture.md` properly as part of steps 1–4 (spec
-before code, as the old prototype did).
+Before starting Phase 3's live smoke test, obtain `ANTHROPIC_API_KEY` from the user (Open
+Question 1). Nothing else blocks Phase 0.
 
 # Session Handoff
 
