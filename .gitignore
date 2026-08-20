@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# editor / OS
+.DS_Store
+.vscode/
+.claude/
+
+# build artifacts
+tsconfig.tsbuildinfo

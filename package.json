@@ -1,0 +1,8 @@
+{
+  "name": "commas-ai-agent",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Prototype of the technical agent system (LLM + MCP + connectors + chat) behind the Commas AI Evidence Copilot concept.",
+  "scripts": {}
+}
