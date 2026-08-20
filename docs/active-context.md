@@ -1,106 +1,303 @@
-# Commas AI Agent - Active Context
+# Commas AI Agent — Active Context
 
-**Last updated:** 2026-08-21 · **Updated by:** Claude (repo scaffolding session)
+**Last updated:** 2026-08-21 · **Updated by:** Claude (technical reconnaissance session)
 
-> **Read this file first in any new session.** It is the source of truth for where this build
-> stands. This repo was just created — as of this writing it contains directory structure and
-> stub docs only, no implementation.
+> **Read this file first in any new session.** It is the persistent source of truth for this
+> repository. Update it after any meaningful implementation work. Everything below is labeled
+> as CONFIRMED (verified against the repo, the old prototype, or commasdocs.com on 2026-08-21)
+> or as assumption/unknown. Do not build on the unknowns without resolving them.
 
 ---
 
-## 1. What this repo is
+# Current Objective
 
-`commas-ai-agent` is a **new, separate prototype**, a sibling to `commas-ai-copilot` in the same
-vault directory (`../commas-ai-copilot`). It is not a branch or evolution of that repo's git
-history — it is a fresh repo with its own scope.
+Build a standalone prototype exploring what a **native AI agent experience inside Commas**
+could look and behave like: a chat-first agent that performs multi-step tool use and reasoning
+over Commas data (and connected external sources) until it reaches a satisfactory result,
+exposing only safe user-facing progress — never chain-of-thought.
 
-**Why the split, and why the name change:**
-- `commas-ai-copilot` is the **existing, working prototype**: a 100% client-side React app that
-  simulates the Evidence Copilot UX (scripted "AI investigation" over static mock data, no LLM,
-  no MCP, no backend). It was built to demo a *product concept* in an interview context. It stays
-  as-is; do not build agent/LLM/MCP work into that repo.
-- `commas-ai-agent` is where the **actual technical agent system** gets prototyped: a real
-  LLM-backed agent loop, MCP client(s), connectors, context management, and a chat surface.
-  "Copilot" described a UX/product concept; "agent" describes the technical system actually being
-  architected here — hence the rename for this repo rather than reusing the old name.
+Conceptual runtime loop:
 
-**Relationship to the old repo's open questions:** `commas-ai-copilot/docs` (well,
-`commas-ai-copilot/active-context.md` at its repo root) documents an unresolved question — whether
-a chat-based UX and MCP/agent architecture were ever actually decided, since nothing in that
-repo's visible history supported them. The existence of this new repo is a strong signal that the
-answer is "yes, build it" — but that has **not been explicitly reconfirmed by the user in this
-repo's context yet**. Treat the chat/MCP/agent direction as the working assumption for
-`commas-ai-agent`, but don't assume specifics (which LLM, which MCP servers, chat UX details)
-that haven't actually been stated — see Section 4.
+```
+User
+→ Commas AI Agent (our orchestration layer)
+→ LLM
+→ MCP client
+→ Commas MCP server / external MCP servers
+→ tool result
+→ LLM
+→ next tool call … or final answer
+```
 
-## 2. Current State
+The flagship contextual experience is **Resolution Center**: the AI helps a seller investigate
+and resolve a payment dispute using information from Commas and connected sources.
 
-**As of this session, this repo contains only scaffolding:**
-- Directory structure: `docs/`, `src/{agent,llm,mcp,connectors,context,chat,ui}/`, `tests/`,
-  `public/`, `.claude/`.
-- Stub docs: `docs/product-spec.md`, `docs/architecture.md`, `docs/implementation-plan.md` — all
-  placeholders, not yet written. Do not treat their headings as decisions; they're a table of
-  contents for work that hasn't happened.
-- No `package.json` dependencies chosen beyond a minimal placeholder — stack (LLM SDK, MCP SDK,
-  frontend framework, etc.) is not yet decided. The old repo used React 18 + TypeScript + Vite +
-  Tailwind for its UI layer; that's a reasonable starting assumption for `src/ui/` if this repo
-  ends up needing a comparable frontend, but it hasn't been confirmed as the choice for this repo.
-- No git remote / GitHub repo created for `commas-ai-agent` yet (the old repo is public at
-  `github.com/saksham-chaturvedii/commas-ai-copilot` — this one hasn't been pushed anywhere).
-- No code in any `src/` subdirectory yet — each contains only a placeholder `README.md`
-  describing its intended purpose (see Section 3).
+This repo is NEW and separate from `../commas-ai-copilot` (the earlier UI-only demo). That repo
+is **reference material only** — do not modify it, and do not assume its architecture (scripted
+fake AI, no backend) carries over here.
 
-## 3. Intended Module Layout (`src/`)
+# Product Scope
 
-These directories were scaffolded per explicit instruction; their purpose as named, not yet
-implemented:
+What the prototype must demonstrate:
 
-- `agent/` — the agent/reasoning loop: orchestrates tool calls, decides what evidence to gather,
-  drives the investigation.
-- `llm/` — LLM client integration (model calls, prompting, streaming).
-- `mcp/` — MCP client logic: connecting to and calling MCP servers (e.g., a Commas MCP server, if
-  one is exposed — see the old repo's Section 5 for interview context on this).
-- `connectors/` — external data source connectors (e.g., Google Calendar, Zoom/Fathom, Gmail, CRM
-  — mentioned as product ideas in the old repo's interview notes, not yet scoped here).
-- `context/` — context assembly/management for the agent (gathering and formatting evidence,
-  session state, etc.).
-- `chat/` — chat interface logic (conversation state, message handling).
-- `ui/` — presentation layer.
+1. A real (not scripted) agent loop: LLM-driven multi-step tool selection over MCP tools, with
+   live, safe progress streaming to the UI.
+2. A chat-first UX woven through the Commas product surface (left-nav chat, side panel,
+   floating button, contextual page-level AI) rather than a separate AI destination.
+3. Connector/source management (Notion-AI-style) and contextual suggested actions
+   (Claude-Desktop-style).
+4. The Resolution Center dispute-investigation flow end to end.
+5. AI/chat credits as a product concept (metering UI; billing itself mocked).
 
-None of these have real content yet. Do not assume any file exists inside them without checking.
+Out of scope: real submission of dispute evidence (not even possible via API — see Risks),
+real money movement, multi-tenant auth, production hardening.
 
-## 4. Open Questions
+# Architecture
 
-1. **Scope confirmation:** is `commas-ai-agent` meant to fully replace the "chat + MCP + agent"
-   direction that was ambiguous in `commas-ai-copilot`, or run in parallel with it as a separate
-   technical exploration while the UI-only prototype stays product-facing? Not yet confirmed.
-2. **Stack:** no LLM provider, MCP SDK, or frontend framework has been chosen for this repo.
-   Don't default to matching the old repo's stack without checking with the user first if it
-   matters for the task at hand.
-3. **Relationship to `PROTOTYPE_SPEC.md`** (old repo): does this new repo supersede it, extend it,
-   or ignore it? Unconfirmed.
-4. **GitHub hosting:** no remote has been created for this repo. Ask before creating a public
-   GitHub repo or pushing, same as any other repo-visibility-affecting action.
+## Terminology (applies throughout)
 
-## 5. Next Steps
+- **MCP server** = the side that *exposes* tools/data (Commas operates one; external services
+  would each be one).
+- **MCP client** = the side that *calls* those tools (our agent backend — or Anthropic's API
+  acting on our behalf via the MCP connector).
 
-1. Write `docs/product-spec.md` — what is this agent prototype actually supposed to do, scoped
-   with the user (don't invent scope).
-2. Write `docs/architecture.md` — agent loop, LLM client, MCP client design, frontend/backend
-   split, once decisions are actually made.
-3. Write `docs/implementation-plan.md` — phased build plan once spec + architecture exist.
-4. Pick and wire up a real stack (`package.json`) once the above are settled.
+## Intended architecture (recommended, not yet confirmed by the user)
 
-## 6. Session Handoff Instructions
+```
+┌──────────────────────────── Browser (React UI) ────────────────────────────┐
+│  Commas app shell · chat surfaces · Resolution Center · connector picker   │
+└──────────────┬─────────────────────────────────────────────────────────────┘
+               │ HTTP + SSE (safe progress events only)
+┌──────────────▼──────────────── Node/TS backend ────────────────────────────┐
+│  "Commas AI Agent" orchestration layer                                     │
+│   · agent loop: Anthropic TS SDK (@anthropic-ai/sdk)                       │
+│   · model: claude-opus-5, adaptive thinking                                │
+│   · MCP client → tool dispatch                                             │
+│   · progress mapper: tool events → user-safe status lines (never CoT)     │
+│   · credits metering, chat session store                                   │
+└───────┬──────────────────────────────┬─────────────────────────────────────┘
+        │                              │
+┌───────▼──────────────┐   ┌───────────▼───────────────────────────┐
+│ Mock Commas MCP      │   │ Mock external MCP servers/connectors  │
+│ server (in-process): │   │ Fathom · Zoom · Google Meet ·         │
+│ fanbasis_* tool      │   │ ClickFunnels (hand-authored data)     │
+│ shapes + disputes    │   └───────────────────────────────────────┘
+│ mock data            │
+└──────────────────────┘
+   (config flag can later point at the REAL remote Commas MCP server —
+    confirmed to exist, see Integrations — instead of the mock)
+```
 
-Future sessions working in this repository should:
+Why a backend at all: API keys (Anthropic + Commas) cannot ship to the browser; the agent loop,
+MCP client, and CoT-filtering must run server-side. This is the single biggest architectural
+difference from the old prototype (which was 100% client-side).
 
-1. **Read this file first**, in full, before doing anything else.
-2. Check `../commas-ai-copilot/active-context.md` (sibling repo) for the original product context,
-   interview background, and the old prototype's implementation state — don't re-derive that
-   history from scratch, but don't assume it all transfers to this repo's decisions either.
-3. Treat everything under Section 3 (module layout) as **structure only**, not implemented
-   behavior, until this file says otherwise.
-4. **Update this file after any meaningful work** — spec decisions, architecture decisions, first
-   real code — so the next session isn't rediscovering state from git log archaeology.
-5. Don't create a GitHub remote or push without asking first (Section 4, Q4).
+## MCP client — two viable mechanisms (decision pending)
+
+1. **Self-hosted MCP client** via `@modelcontextprotocol/sdk` in our backend; tools surfaced to
+   the LLM through the Anthropic SDK's tool runner (`client.beta.messages.toolRunner` +
+   `betaZodTool`). Most control; works identically against mock and real servers; per-turn
+   hooks give us the write-action confirmation gate. **Recommended.**
+2. **Anthropic Messages API MCP connector** (beta `mcp-client-2025-11-20`): pass
+   `mcp_servers: [{type:"url", url, name}]` plus `tools: [{type:"mcp_toolset",
+   mcp_server_name}]` and Anthropic's server acts as the MCP client. Less code, but the MCP
+   server must be reachable from Anthropic's infra (fine for the real remote Commas MCP; not
+   for an in-process mock), and both halves are required or the request 400s.
+
+Mock-first development pushes toward mechanism 1, with 2 as a later option for "real mode."
+
+# UX
+
+All items below are **requested/confirmed direction from the user (2026-08-21)**; visual
+reference screenshots live in `docs/references/`:
+
+- Chat entry in the left navigation; **New Chat**; chat history list.
+- A **right-side AI panel** (see `notion-ai-chat-3.png`).
+- A **floating AI/chatbot button** when working elsewhere in Commas.
+- **Contextual AI inside pages** such as Resolution Center (`resolution-center.png` shows the
+  real Commas page to reproduce).
+- **Connector/source selection inside the chat composer** (`notion-mcp-2.png`).
+- **AI/chat credits** surfaced in the UI.
+- **Useful empty state** on a new chat (`notion-ai-chat-2.png`).
+- **Contextual suggested actions** similar to Claude Desktop (`claude-desktop.png`).
+- **Source/connector management** similar to Notion's AI/MCP settings (`notion-mcp.png`).
+- Native Commas look and feel (`commas-dashboard.png`, `commas-integrations.png`); the old
+  prototype's shell components are the working reference for this.
+
+Fine-grained layout/interaction decisions within these surfaces are NOT yet made.
+
+# Integrations
+
+## Commas platform — CONFIRMED from commasdocs.com (fetched 2026-08-21)
+
+- **Commas is the rebrand of FanBasis** (changelog, May 2026). API base URL is still
+  `https://www.fanbasis.com/public-api`; QA/sandbox base is `https://qa.dev-fan-basis.com`.
+  MCP tool names still carry the `fanbasis_` prefix.
+- **Auth:** every request sends the seller API key in an `x-api-key` header (found in
+  dashboard → Account → API Keys). No OAuth for the public API. Keys carry **granular scopes**
+  (`checkout-sessions`, `refunds`, `payments`, `webhooks`, `customers`, `subscriptions`);
+  missing scope → 403 naming the scope. A subset of endpoints lives on the Seller v1 API
+  (`/api/seller/v1/…`, subscription proration/upgrades).
+- **Commas MCP server EXISTS and is real.** Consumption paths documented:
+  - Claude Desktop one-click `.mcpb` extension (API key stored in the OS keychain).
+  - Manual config via `npx mcp-remote https://hearty-flow-production.up.railway.app/mcp
+    --header x-api-key:<KEY>` — i.e., a **deployed Streamable-HTTP remote MCP server** exists
+    today (on Railway, not on the branded domain).
+  - An official `https://www.fanbasis.com/mcp` endpoint with OAuth (for ChatGPT/Grok) is
+    documented as **"Coming Soon"** — explicitly not deployed yet.
+- **MCP read tools (11 documented):** `fanbasis_list_products`, `fanbasis_list_customers`,
+  `fanbasis_list_transactions`, `fanbasis_get_transaction`, `fanbasis_list_subscribers`,
+  `fanbasis_get_checkout_session`, `fanbasis_get_session_transactions`,
+  `fanbasis_get_session_subscriptions`, `fanbasis_list_discount_codes`,
+  `fanbasis_get_discount_code`, `fanbasis_get_payment_methods`.
+- **MCP write actions exist** (charge a customer, create/update/delete discount codes,
+  extend/cancel subscriptions, refunds) and are "gated behind an explicit confirmation step."
+  Docs are inconsistent on totals — "11 built-in tools," "30+ built-in tools," and the CLI's
+  "27 tools available" all appear. Treat the 11 read tools as the confirmed floor; the exact
+  write-tool list is **unknown**.
+- **CLI:** `npm install -g commas-cli`, `commas login`, `--json` and `--yes` flags explicitly
+  "built for AI agents," sandbox env switching, `commas tools` / `commas call <tool>` escape
+  hatch. Full command table in the docs.
+- **Webhooks:** 14 event types including `dispute.created` and `dispute.updated` with a full
+  documented payload (dispute hashid, `status`, `reason`, `amount`/`dispute_fee`/`total_amount`
+  in dollars, `due_by` deadline, customer id/name/email, `organization_id`). Delivery is
+  **at-most-once and never retried**.
+- **Dispute lifecycle statuses:** `needs_response → under_review → won | lost | lost_rdr`,
+  plus `warning_needs_response` / `warning_closed` (Ethoca-style early warnings). Evidence
+  requirements per dispute reason are documented (fraud / not-received / not-as-described).
+
+## Critical CONFIRMED gap
+
+- **There is NO REST endpoint to list or fetch disputes, no MCP dispute tool, and no API to
+  submit dispute evidence.** Evidence is submitted "through your Commas dashboard" only;
+  dispute data reaches integrators only via the two webhooks. The flagship Resolution Center
+  scenario therefore **cannot run against real Commas dispute data** — dispute records must be
+  mocked (or webhook-ingested, which is out of prototype scope).
+
+## External integrations (Fathom, Zoom, Google Meet, ClickFunnels)
+
+Candidate sources named by the user. **Nothing about them is confirmed** — no MCP servers,
+APIs, or auth flows were investigated. For this prototype they will be mocked connectors.
+(Context: the Commas CPO floated exactly this connect-external-sources idea for off-platform
+fulfillment — see `../commas-ai-copilot/active-context.md` §5.)
+
+# Current Repository State
+
+- Scaffolding only: `docs/`, `src/{agent,llm,mcp,connectors,context,chat,ui}/` (placeholder
+  READMEs, no code), `tests/`, `public/`, minimal `package.json` (no deps), `.gitignore`.
+- `docs/references/` — 10 UX reference screenshots (Notion AI ×4, Notion MCP ×2, Commas
+  dashboard/integrations/Resolution Center, Claude Desktop).
+- `docs/product-spec.md`, `docs/architecture.md`, `docs/implementation-plan.md` — stubs.
+- Git: local repo on `main`, 2 commits, **no remote**.
+
+# Completed
+
+- Repo scaffold + reference screenshots (committed).
+- Technical reconnaissance of commasdocs.com, the old prototype, and this repo (this file is
+  the record; verified by direct fetch/inspection on 2026-08-21).
+
+Nothing else. No application code exists.
+
+# In Progress
+
+- Nothing (recon just finished; implementation not started).
+
+# Not Implemented
+
+Everything: frontend, backend, agent loop, MCP client, mock MCP servers, chat UX, credits,
+Resolution Center flow, tests, deployment.
+
+# Confirmed Technical Decisions
+
+- **Language:** TypeScript end to end.
+- **What can be reused from `../commas-ai-copilot`** (copy/adapt as reference, never import
+  across repos): the Commas visual shell (`Sidebar.tsx`, `TopNav.tsx`, `ResolutionCenter.tsx`,
+  `DisputeDetail.tsx`, `FilterPill`/popovers, `Badge`, icon components), Tailwind v4 + Vite
+  setup, the internally-consistent dispute mock dataset (`mockData.ts`, 304 lines), and the
+  Playwright e2e approach. **What must NOT be reused:** its architecture — scripted fake AI,
+  all state in `App.tsx`, no backend.
+- **Recon method decisions:** commasdocs.com is a single-page JS-rendered site — WebFetch
+  truncates it; fetch raw HTML via curl and extract (content is embedded in script payloads).
+
+The following are **recommended but awaiting user sign-off** (see Open Questions):
+frontend = React 18 + Vite + Tailwind v4 (matching old prototype for visual reuse);
+backend = small Node/TS server (Hono or Express) with SSE; LLM = Anthropic TS SDK
+(`@anthropic-ai/sdk`), model `claude-opus-5`, adaptive thinking, tool-runner loop;
+MCP = `@modelcontextprotocol/sdk` self-hosted client, mock-first.
+
+# Open Questions
+
+1. **Real LLM or scripted?** Recommendation: real Anthropic API calls with mocked tools —
+   that's the point of this prototype vs. the old one. Requires an `ANTHROPIC_API_KEY` and
+   accepts per-demo cost. Needs user confirmation.
+2. **Ever point at the real Commas MCP server?** The Railway remote endpoint works today with
+   a seller API key. Recommendation: mock-only by default, optional "real mode" behind a
+   config flag, QA/sandbox key only. Needs user confirmation (and a key).
+3. **Chat persistence:** in-memory / localStorage vs. SQLite on the backend. Recommendation:
+   backend in-memory + JSON file snapshot (simplest that survives a refresh).
+4. **GitHub:** create a remote for this repo? (None exists; old repo is public.)
+5. Exact write-tool list of the Commas MCP server (docs inconsistent: 11 vs 27 vs 30+).
+6. Whether Commas plans an in-app agent surface of their own (interview said yes, per-org
+   sandboxed agents + credits) — relevant for framing, unknowable from docs.
+
+# Risks / Blockers
+
+- **[Blocker-shaped] No disputes API/MCP/evidence-submission API.** The flagship scenario can
+  only be demonstrated on mock dispute data, and "submit response" must stay simulated. This
+  is now a *confirmed* platform limitation, not a prototype shortcut.
+- **Remote MCP endpoint fragility:** the only live endpoint is an unbranded Railway URL found
+  in the docs' config generator; the official `/mcp` + OAuth endpoint is unreleased. Real-mode
+  demos could break without notice.
+- **Write tools move real money** (charges, refunds, cancellations). Any real-mode testing
+  must use the QA sandbox base URL and a sandbox key, never production.
+- **Webhook delivery is at-most-once, never retried** — any future real dispute ingestion
+  needs API reconciliation, which… doesn't exist for disputes. Circular gap.
+- **CoT safety:** the UI must render only tool-level progress ("Checking transaction history…"),
+  never model reasoning. Anthropic's current models default to omitted thinking text, which
+  helps, but the progress mapper is still our responsibility.
+- **Docs internal inconsistencies** (tool counts; Seller v1 auth shown as both `x-api-key` and
+  Bearer). Verify against the live server before relying on either.
+- **Rebrand residue:** `fanbasis_*` names and `fanbasis.com` URLs are the real identifiers;
+  don't "clean them up" to `commas_*` in mock tools if fidelity to the real server matters.
+
+# Next Steps
+
+Recommended implementation order (after Open Questions 1–3 are answered):
+
+1. Stack scaffold: Vite + React + Tailwind frontend; Node/TS backend with SSE; shared types
+   package; wire `npm run dev` for both.
+2. Port/adapt the Commas visual shell + Resolution Center from the old prototype; extend the
+   left nav with the Chat entry.
+3. Mock Commas MCP server (the 11 `fanbasis_*` read tools + mock dispute tools our agent
+   needs + confirmation-gated mock write tools) and mock external connectors (Fathom, Zoom,
+   Google Meet, ClickFunnels) with hand-authored, internally consistent data extending the
+   old repo's dispute scenario.
+4. Agent backend: Anthropic tool-runner loop, MCP client dispatch, progress mapper, SSE
+   endpoint, credits metering.
+5. Chat UX: history, new chat, empty state with suggested actions, composer with
+   connector/source picker, credits display.
+6. Right-side panel, floating button, Resolution Center contextual entry point.
+7. Flagship flow: dispute investigation end to end on mock data.
+8. Playwright e2e for the happy path; then update this file.
+
+Write `docs/product-spec.md` and `docs/architecture.md` properly as part of steps 1–4 (spec
+before code, as the old prototype did).
+
+# Session Handoff
+
+Future Claude Code sessions must:
+
+1. **Read this file first, in full**, before meaningful work; verify specific claims against
+   the repo/docs only as needed rather than re-deriving everything.
+2. **Update this file after meaningful implementation** — move items between
+   Completed / In Progress / Not Implemented, record new decisions, resolve or add Open
+   Questions. Nothing goes in Completed without being actually verified (run/tested).
+3. Treat `../commas-ai-copilot` as read-only reference. Its own `active-context.md` holds the
+   product/interview background — but its architecture is explicitly NOT the template for this repo.
+4. Never put API keys in the repo; environment variables only. Real Commas calls (if ever
+   enabled) use the QA sandbox.
+5. Do not create a GitHub remote or push without asking (Open Question 4).
+6. Do not present unconfirmed capabilities as real: anything not in the CONFIRMED sections
+   above is an assumption — say so.
+7. The commasdocs.com fetch method that works is documented under Confirmed Technical
+   Decisions (curl the raw HTML; content is inside script payloads).
