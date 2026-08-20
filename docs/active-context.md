@@ -1,6 +1,14 @@
 # Commas AI Agent — Active Context
 
-**Last updated:** 2026-08-21 · **Updated by:** Claude (Commas tool layer / real agent backend session)
+**Last updated:** 2026-08-21 · **Updated by:** Claude (conversation system / source adapters / write-approval session)
+
+> **Persistent multi-turn conversations, a real multi-source adapter layer, and a write/
+> approval flow now exist.** See "Conversation System, Source Adapters & Write-Approval Flow"
+> below for the full account of this session — including what was explicitly requested but
+> NOT attempted (the stabilization audit and the visual polish pass; see that section's closing
+> note). 48/48 tests pass; verified live in a browser (multi-turn memory, reload persistence,
+> multi-source dispute investigation, write approval, source scoping, insufficient credits —
+> 0 console errors).
 
 > **A real agent backend now exists.** User → Agent → LLM → MCP client → Commas MCP server →
 > tool result → LLM → final answer is implemented and tested end-to-end (see "Commas Tool
@@ -8,9 +16,7 @@
 > MCP connection defaults to an in-process **mock** Commas MCP server (real MCP protocol,
 > mock data) because no Commas credentials are available in this environment; the LLM
 > defaults to a **deterministic stub** because no `ANTHROPIC_API_KEY` is available — both are
-> swappable for the real thing via env vars with no code changes. 36/36 tests pass, and the
-> full loop was verified live in a browser against the real backend (4/4 scenarios, 0 console
-> errors, 0 secrets in the client bundle).
+> swappable for the real thing via env vars with no code changes.
 
 > **Specification set now exists:** `PROTOTYPE_SPEC.md` (product + UX + agent behavior +
 > demo flows), `ARCHITECTURE.md` (system design + event contract + request/response loop),
@@ -615,6 +621,164 @@ only speaks MCP. `server/llm/` and `server/mcp/` are both swappable behind their
   cut (task said "do not build elaborate backend infrastructure merely to demonstrate UI");
   real streaming would need this endpoint rewritten as SSE and is a reasonable next step.
 
+# Conversation System, Source Adapters & Write-Approval Flow (2026-08-21)
+
+The user's task this session opened with one fully-specified request ("implement the
+conversation system") and, while that was already being worked, five more complete task
+blocks arrived in the same turn (source/connector architecture, contextual AI in Resolution
+Center, agent-interaction-model polish, a 7-flow stabilization audit, and a final visual
+polish pass — each its own "STOP."-terminated spec). Given the scope, the explicit decision
+made and stated back to the user was to implement the first four with real rigor and
+**explicitly not attempt** the stabilization audit or the visual polish pass this session,
+rather than rush all six and risk false claims of completion. That decision held: items 1–3
+below are done and verified; the stabilization audit and visual polish pass were **not
+started** — see "Explicitly not attempted" at the end of this section.
+
+## 1. Conversation system
+
+- **Model** (`src/lib/types.ts` / mirrored in `server/types.ts`): `Chat { id, title, createdAt,
+  updatedAt, status: "idle"|"running"|"error", enabledSources, context?, messages }`. Titles
+  are generated heuristically from the first user message (`useChatStore.tsx`).
+- **Left nav**: existing Chat entry now shows New Chat + a Today/Yesterday-grouped history
+  list (`ChatHistoryList.tsx`, unchanged visual language from the earlier UI passes).
+- **Context retention without duplication**: a chat stores only a `PageContext` reference
+  (`kind`, `id`, `label`, optional `dispute` detail block) — not a copy of the underlying
+  dispute/dashboard data — plus its own `enabledSources` and `messages`. Nothing else is
+  duplicated per-chat.
+- **Multi-turn memory, threaded end to end**: `ConversationTurn {role, text}[]` built from
+  each chat's prior messages (`historyFor()`, capped at 20 turns) is sent as `history` on
+  every `POST /api/agent/run` call, consumed by `AnthropicLlmClient` (prepended to the real
+  message array) and by `StubLlmClient` (a `findRecentEmail()` heuristic that resolves
+  pronoun-style follow-ups like "What about her transactions?" against the prior turn).
+  Verified live: asking about "Sarah Johnson" then "What about her transactions?" correctly
+  resolves the referent (see live verification below).
+- **Credits**: `CREDIT_COST_PER_MESSAGE = 1`, `CREDIT_COST_PER_STEP = 1`,
+  `CREDIT_COST_PER_WRITE = 5`; declined write actions cost 0. Balance shown in a pill in both
+  the Chat header and the right panel; exhausted state disables the composer with a clear
+  message and a "Reset demo" affordance (mocked, no real billing anywhere).
+- **New Chat empty state**: Claude-Desktop/Notion-AI-style greeting + suggested capability
+  chips (Summarize my sales, Look up a customer, Analyze my disputes, Help me respond to a
+  customer, Find information across my connected apps) that feed directly into the normal
+  send-message flow.
+- **Persistence**: `useChatStore.tsx` hydrates `{chats, sources, credits}` from
+  `localStorage` (`commas-ai-agent:v1`) on mount and persists on every change via a
+  `useEffect`. Verified both automated (Vitest, simulated unmount/remount) and live in a
+  real browser (see below) — a chat's full message history, including a second turn's
+  answer, survives a real page reload.
+
+## 2. Source adapter architecture
+
+Replaced the single hardcoded Commas MCP client wiring with a uniform `SourceAdapter`
+interface (`server/adapters/types.ts`: `sourceId`, `kind: "mcp"|"api"`, `listTools()`,
+`callTool()`) so the Agent talks to one abstraction regardless of what's behind it — per the
+explicit instruction not to force every integration to look like MCP.
+
+- **MCP-backed adapters** (`server/adapters/commasAdapter.ts`, `meetingsAdapters.ts` +
+  `server/mcp/mockFathomServer.ts` / `mockZoomServer.ts`, connected in-process via
+  `server/mcp/connectInProcess.ts`): Commas (existing), plus new mock Fathom and Zoom MCP
+  servers — used because MCP is the real mechanism for Commas and is a reasonable stand-in
+  for meeting-recording tools.
+- **API-style adapters** (`server/adapters/gmailAdapter.ts`, `calendarAdapter.ts`,
+  `crmAdapter.ts`): plain mock-data adapters with no MCP layer, because OAuth/REST is the
+  real mechanism for these — no invented capabilities beyond one lookup tool each, all mock
+  data for the existing Sarah Johnson / Dispute #2481 story.
+- **Genuine multi-source reasoning, not a hardcoded sequence**: the runtime
+  (`server/agent/runtime.ts`) exposes all enabled adapters' tools to the LLM/stub uniformly;
+  nothing in the architecture forces a fixed call order. `StubLlmClient`'s dispute
+  investigation *does* follow a fixed Commas → CRM → Gmail → Fathom → Zoom chain, but that
+  ordering lives only in the stub's scripted approximation of reasoning (documented inline as
+  such) — `AnthropicLlmClient` receives the identical tool set and decides freely. Verified
+  live: the investigation answer cites each connected source individually (Fathom call
+  transcripts, Zoom meeting logs) and lists a "Missing information" note naming exactly the
+  sources that were disabled for that chat.
+- **`GET /api/health`** now reports `commasConnected` plus a `sources` array (id/kind/status)
+  for all 6 adapters.
+
+## 3. Contextual AI + write action with confirmation (Resolution Center)
+
+- **Structured context, no DOM scraping**: `PageContext.dispute` carries customer name/email,
+  transaction id, amount, reason, opened/evidence-due dates, and evidence status — built once
+  when the panel opens and passed as data, never re-derived from the rendered UI.
+- **One real write tool, safety-gated**: `commas_mark_dispute_response_ready` (added to the
+  mock Commas MCP server) flips a mock "evidence ready" flag — explicitly documented in its
+  own tool description as simulated, since the real Commas platform has no evidence-submission
+  API (confirmed earlier this project — see "Critical CONFIRMED gap" above). The runtime
+  (`server/agent/runtime.ts`) pauses **before executing** any tool classified `"write"` and
+  returns a `pendingApproval` to the client instead; a new `POST /api/agent/approve` endpoint
+  resumes the same loop only after an explicit user decision. Declining a write action
+  provably never executes it (covered by a runtime test asserting no state change on decline).
+- **UI**: `ApprovalCard.tsx` renders inline in the message list — a one-line plain-English
+  summary plus Approve/Decline buttons, using the existing `content-card`/`btn-dark`/
+  `btn-secondary` treatments, no new visual system.
+
+## Live verification (this session, real browser, both servers actually running)
+
+Ran a Playwright script against `npm run dev` (Vite, 5173) and `npx tsx server/index.ts`
+(Hono, 8787) — mock LLM (no `ANTHROPIC_API_KEY` in this environment, as before), mock/
+in-process MCP for all adapters. All six checks passed, zero console errors:
+
+1. New chat → "Look up customer sarah.johnson@email.com" → correct answer → follow-up "What
+   about her transactions?" → correctly resolves to the same customer's transaction (proves
+   multi-turn memory works live, not just in tests).
+2. Real page reload (no app router exists, so a raw reload always lands back on the default
+   Dashboard view — expected SPA behavior, not a bug) → navigate to Chat → the conversation
+   from step 1 is in history → reopening it shows both turns' full content (proves
+   `localStorage` persistence survives an actual reload, not just a simulated unmount).
+3. Resolution Center → open the dispute row → "Investigate with AI" → "Help me resolve this
+   dispute" → structured multi-source answer citing Fathom and Zoom by name with a "Missing
+   information" note for the two disabled sources (CRM, Gmail).
+4. In that same dispute chat, "mark the response ready" → approval card renders with a plain-
+   English summary → Approve → tool actually runs → confirmation message, no page-level
+   evidence-submission claim (matches the documented platform gap).
+5. New chat → Sources menu → toggle a source off/on, "My sources" panel matches the
+   Commas-integrations-style reference.
+6. Draining the mocked credit balance to 0 (via localStorage, then reload) → composer
+   disables with "You're out of AI credits" placeholder + a red explanatory line + a working
+   "Reset demo" control — no crash, no silent failure.
+
+Screenshots for all 6 retained in job scratch space (not committed — same convention as
+prior sessions' ad-hoc Playwright verification).
+
+## Automated verification
+
+- `npx tsc -b` — clean, 0 errors (3 tsconfig projects unchanged: app/node/server).
+- `npm run lint` — clean, 0 errors/warnings.
+- `npx vitest run` — **48/48 passing** (was 36; +12 net for this session: new/updated
+  `tests/server/{registry,runtime,app,mcpClient}.test.ts` covering multi-source scoping,
+  the approval/decline flow, and multi-turn history threading, plus `tests/ChatFlow.test.tsx`
+  additions for approval-card rendering and a corrected persistence test).
+
+## A real bug this session's tests caught and fixed
+
+`EMAIL_REGEX` in `server/llm/stubClient.ts` originally used `/[\w.+-]+@[\w-]+\.[\w.-]+/`,
+which greedily matched a sentence-ending period after an email address in assistant reply
+text (e.g. "...sarah.johnson@email.com." from a prior answer), producing an email string that
+didn't exactly match the stored customer record and silently broke the "What about her
+transactions?" follow-up. Fixed to `/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/` (no longer captures a
+trailing non-domain period); caught by the new multi-turn Vitest test, confirmed fixed both
+there and in the live browser check above.
+
+## Explicitly not attempted this session (flag honestly, do not claim done)
+
+Two of the six task blocks that arrived this session were **deliberately not started**,
+per the scope decision stated at the top of this section:
+
+- **The 7-flow stabilization audit** (Dashboard AI, Chat history, Sources, Resolution Center,
+  Agent loop, Failure states, Credits) — no systematic pass was run checking each flow against
+  existing Playwright/test infrastructure or against the Notion AI / Claude Desktop / Commas
+  reference screenshots. The live verification above exercises most of these flows once each,
+  successfully, but that is spot-checking, not the audit that was asked for (which calls for a
+  written report of passing/failing tests, known limitations, mocked functionality, and
+  production gaps as its own deliverable).
+- **The final visual polish pass** — no dedicated typography/spacing/border/radius/shadow/
+  icon-alignment comparison against the five reference screenshot sets was performed. The UI
+  is visually consistent with the existing Commas AI Copilot language (confirmed via the live
+  screenshots above and by construction — no new components introduced this session, only
+  reuse of `content-card`/`btn-dark`/`btn-secondary`/existing chat components), but that is not
+  the same as the requested dedicated polish pass.
+
+Both remain open — see "Next Steps" below.
+
 # Current Repository State
 
 - `docs/` — full spec set (`PROTOTYPE_SPEC.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,
@@ -624,10 +788,16 @@ only speaks MCP. `server/llm/` and `server/mcp/` are both swappable behind their
   agent runtime, MCP client, and mock Commas MCP server — see "Commas Tool Layer" above for
   the full file list. `npm run dev:all` runs both together (or `dev` + `dev:server`
   separately); Vite proxies `/api` to the backend.
-- `tests/` — 36 Vitest tests passing: frontend (`liteMarkdown`, `Sidebar`, `ChatFlow` —
-  the last now mocks `fetch` at the network boundary) + `tests/server/` (errors, registry,
-  mcpClient, runtime, app — exercising the real backend, stub LLM). No Playwright e2e suite
-  committed yet (IMPLEMENTATION_PLAN.md Phase 4's acceptance criteria calls for one).
+- `tests/` — **48 Vitest tests passing**: frontend (`liteMarkdown`, `Sidebar`, `ChatFlow` —
+  mocks `fetch` at the network boundary, covers multi-turn history, the approval flow, and
+  persistence) + `tests/server/` (errors, registry, mcpClient, runtime, app — exercising the
+  real backend with 6 source adapters and the write-approval pause/resume path, stub LLM). No
+  Playwright e2e suite committed yet (IMPLEMENTATION_PLAN.md Phase 4's acceptance criteria
+  calls for one; this and prior sessions verified live behavior via ad-hoc scripts instead).
+- `server/adapters/` — the `SourceAdapter` abstraction (`types.ts`) plus 6 adapters:
+  `commasAdapter.ts` and `meetingsAdapters.ts` (Fathom, Zoom — all MCP-backed) and
+  `gmailAdapter.ts` / `calendarAdapter.ts` / `crmAdapter.ts` (API-style, no MCP). See
+  "Conversation System, Source Adapters & Write-Approval Flow" above.
 - `package.json` has both frontend and backend dependencies now (`@anthropic-ai/sdk`,
   `@modelcontextprotocol/sdk`, `hono`, `@hono/node-server`, `zod`, `dotenv`, `tsx`,
   `concurrently`, plus the existing frontend stack) and `dev`/`dev:server`/`dev:all`/
@@ -662,14 +832,24 @@ only speaks MCP. `server/llm/` and `server/mcp/` are both swappable behind their
   wiring to call it — see "Commas Tool Layer" above. Verified: typecheck/lint/36 tests/build
   + live browser walkthrough against the real running backend (4/4 scenarios incl. a real
   tool failure), zero console errors, zero secrets in the client bundle (grepped).
+- **Conversation system, source adapters, write-approval flow** (2026-08-21) — persistent
+  multi-turn chats (localStorage), a uniform `SourceAdapter` layer with 6 real adapters
+  (Commas/Fathom/Zoom over MCP, Gmail/Calendar/CRM over mock API), genuine multi-source agent
+  reasoning with per-chat source scoping, one real write tool gated by a pause/resume approval
+  flow — see "Conversation System, Source Adapters & Write-Approval Flow" above. Verified:
+  typecheck/lint/48 tests/build + a 6-scenario live browser walkthrough, zero console errors.
+  **Explicitly not done this session** (see that section's closing note): the 7-flow
+  stabilization audit and the dedicated visual polish pass — both were part of the same
+  request batch but out of scope for this session's rigor budget.
 
 # In Progress
 
-- Nothing. **Next up:** get an `ANTHROPIC_API_KEY` from the user and confirm the real
-  `AnthropicLlmClient` path live (currently real code, never actually invoked); implement
-  write tools + the approval-card UI together (they depend on each other); consider adding
-  the remaining 8 documented `fanbasis_*` read tools; SSE streaming if the synchronous
-  request/response proves limiting.
+- Nothing implementation-wise. **Next up, in priority order:** (1) the stabilization audit
+  (7 named flows) and the visual polish pass, both requested this session and explicitly
+  deferred — see the closing note in "Conversation System, Source Adapters & Write-Approval
+  Flow" above; (2) get an `ANTHROPIC_API_KEY` from the user and confirm the real
+  `AnthropicLlmClient` path live (still real code, never actually invoked); (3) remaining
+  `fanbasis_*` read tools / SSE streaming, unchanged from before this session.
 
 # Not Implemented
 
@@ -681,22 +861,33 @@ only speaks MCP. `server/llm/` and `server/mcp/` are both swappable behind their
 - ~~Full Resolution Center~~ **Done** (list + detail ported). Still not ported from the old
   repo: `SourceView` (per-evidence source-record pages) and the scripted `EvidenceCopilot`
   cards (superseded by the agent panel).
-- **Write-action / approval-card flow** (spec §4.5–4.6) — real write tools on the Commas
-  platform are documented (charge, refund, discount CRUD, subscription changes) but
-  deliberately not implemented: there's no approval-card UI to gate them yet, and shipping a
-  write tool without a confirmation gate would be unsafe.
-- **8 of the 11 documented `fanbasis_*` read tools** (discount codes, checkout sessions,
-  payment methods, etc.) — only customers/list-transactions/get-transaction are implemented,
-  per the task's "small set of useful capabilities" scope.
-- **Non-Commas connected sources** (Google Calendar, Zoom, Fathom, Gmail, CRM) have no
-  backend/MCP behind them at all — still pure UI/sources-menu mocks, out of scope for "the
-  Commas tool layer."
-- **Persistence** — chat/credits/sources state lives only in React context; a page reload
-  loses everything (ARCHITECTURE.md §10's JSON-snapshot store isn't built).
+- ~~Write-action / approval-card flow~~ **Done** (2026-08-21) — one real write tool
+  (`commas_mark_dispute_response_ready`) gated by a runtime-level pause/resume approval flow;
+  see "Conversation System, Source Adapters & Write-Approval Flow" above. Still only **one**
+  write tool exists — the other documented real-platform write actions (charge, refund,
+  discount CRUD, subscription changes) remain unimplemented; would follow the same
+  classification + approval pattern if added.
+- **7 of the 11 documented `fanbasis_*` read tools** (discount codes, checkout sessions,
+  payment methods, etc.) — only customers/list-transactions/get-transaction/dispute are
+  implemented, per the task's "small set of useful capabilities" scope. Unchanged this
+  session.
+- ~~Non-Commas connected sources have no backend~~ **Now have real adapters** (2026-08-21) —
+  Fathom/Zoom via mock MCP servers, Gmail/Calendar/CRM via mock API-style adapters; see
+  "Source adapter architecture" above. All 6 sources are now uniformly callable by the agent,
+  still all mock data (no real OAuth/API credentials exist in this environment).
+- ~~Persistence~~ **Done** (2026-08-21) — `localStorage`-based, not the backend JSON-snapshot
+  store ARCHITECTURE.md §10 describes, but chat/credits/sources state now survives a real page
+  reload; verified live.
 - **SSE/streaming** — `POST /api/agent/run` is synchronous request/response, not
-  ARCHITECTURE.md §9's SSE event stream (deliberate scope cut, documented above).
-- **Playwright e2e suite** committed to the repo. Visual/functional verification this session
-  used ad-hoc Playwright scripts run from job scratch space, not committed tests.
+  ARCHITECTURE.md §9's SSE event stream (deliberate scope cut, documented above). Unchanged
+  this session.
+- **Playwright e2e suite** committed to the repo. Visual/functional verification this and all
+  prior sessions used ad-hoc Playwright scripts run from job scratch space, not committed
+  tests.
+- **The 7-flow stabilization audit and the final visual polish pass** — both explicitly
+  requested this session, both explicitly not attempted; see the closing note in
+  "Conversation System, Source Adapters & Write-Approval Flow" above for exactly why and what
+  a future session should do instead of re-deriving the decision.
 
 # Confirmed Technical Decisions
 
@@ -792,30 +983,37 @@ stub-LLM testing strategy, credits pricing, `commas_*` namespacing for mock disp
 # Next Steps
 
 Phases 2 (mock MCP servers + tool registry) and 3 (agent runtime) from `IMPLEMENTATION_PLAN.md`
-are now substantially done — see "Commas Tool Layer" above for exactly what's real vs. still
-stubbed. What's concretely left:
+are substantially done, and this session added persistent conversations, the full 6-source
+adapter layer, and a write/approval flow on top — see "Conversation System, Source Adapters &
+Write-Approval Flow" and "Commas Tool Layer" above for exactly what's real vs. still stubbed.
+What's concretely left, in priority order:
 
-1. **Get `ANTHROPIC_API_KEY` from the user and verify `AnthropicLlmClient` live** — the
-   single highest-value next step. Set it in `.env`, run `npm run dev:server`, confirm
-   `GET /api/health` reports `llmMode: "anthropic"`, and re-run the same live-browser checks
-   this session did against the stub (customer lookup, transaction lookup, dispute lookup,
-   a deliberate tool failure) to confirm the real model behaves the same way.
-2. **Write tools + approval-card UI, together** — they're coupled: don't add a write tool
-   without the confirmation gate (PROTOTYPE_SPEC.md §4.5–4.6) to pair with it. This is the
-   next meaningful capability expansion.
-3. **Remaining `fanbasis_*` read tools** (discount codes, checkout sessions, payment
-   methods, subscribers) — same pattern as the 3 already implemented in
+1. **The stabilization audit and the visual polish pass** — both were explicitly requested
+   this session as their own deliverables and both were explicitly deferred (see that
+   section's closing note above) rather than rushed. The audit wants a written report (passing/
+   failing tests, known limitations, mocked functionality, production gaps) across 7 named
+   flows; the polish pass wants a dedicated typography/spacing/border/shadow/icon comparison
+   against the five reference screenshot sets. Neither should be attempted with anything less
+   than the rigor the rest of this file demonstrates — don't rubber-stamp them.
+2. **Get `ANTHROPIC_API_KEY` from the user and verify `AnthropicLlmClient` live** — set it in
+   `.env`, run `npm run dev:server`, confirm `GET /api/health` reports `llmMode: "anthropic"`,
+   and re-run this session's live-browser checks (multi-turn memory, multi-source
+   investigation, write approval, persistence, insufficient credits) against the real model to
+   confirm it behaves the same way the stub does.
+3. **More write tools**, following the same classify-as-`"write"` + approval-pause pattern as
+   `commas_mark_dispute_response_ready` — the real platform documents charge/refund/discount
+   CRUD/subscription-change actions that aren't implemented yet.
+4. **Remaining `fanbasis_*` read tools** (discount codes, checkout sessions, payment
+   methods, subscribers) — same pattern as the 4 already implemented in
    `mockCommasServer.ts` + `registry.ts`'s `KNOWN_TOOLS` map.
-4. **SSE streaming** for `POST /api/agent/run`, if the synchronous request/response proves
-   limiting for longer multi-step investigations (e.g., the flagship dispute-investigation
-   flow chaining several tools) — currently the client just waits for the full response.
-5. **Persistence** (ARCHITECTURE.md §10's backend JSON-snapshot store) — chat history still
-   doesn't survive a reload.
-6. **Non-Commas connected sources** (Google Calendar, Zoom, Fathom, Gmail, CRM) have zero
-   backend behind them — would need their own mock MCP servers following the same pattern,
-   if/when real value beyond the Commas-only scope is wanted.
-7. **Committed Playwright e2e suite** (this session, like prior ones, verified visually via
-   ad-hoc scripts in job scratch space, not committed tests).
+5. **SSE streaming** for `POST /api/agent/run`, if the synchronous request/response proves
+   limiting for longer multi-step investigations — currently the client just waits for the
+   full response and paces step-reveal client-side.
+6. **Real OAuth/API credentials for Gmail/Calendar/CRM**, and a real Fathom/Zoom API/MCP
+   integration, if/when this prototype needs to move past mock data for those 5 sources.
+7. **Committed Playwright e2e suite** — every session so far, including this one, has
+   verified live behavior with ad-hoc scripts in job scratch space rather than committed
+   tests.
 
 # Session Handoff
 

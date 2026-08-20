@@ -16,10 +16,14 @@ export class AnthropicLlmClient implements LlmClient {
   }
 
   async nextStep(input: LlmStepInput): Promise<LlmStepResult> {
-    const { systemPrompt, userPrompt, availableTools, history } = input;
+    const { systemPrompt, userPrompt, availableTools, toolHistory, conversationHistory } = input;
 
-    const messages: Anthropic.MessageParam[] = [{ role: "user", content: userPrompt }];
-    for (const record of history) {
+    const messages: Anthropic.MessageParam[] = conversationHistory.map((turn) => ({
+      role: turn.role,
+      content: turn.text,
+    }));
+    messages.push({ role: "user", content: userPrompt });
+    for (const record of toolHistory) {
       messages.push({
         role: "assistant",
         content: [{ type: "tool_use", id: record.toolCallId, name: record.toolName, input: record.input }],

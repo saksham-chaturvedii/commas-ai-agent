@@ -1,6 +1,6 @@
-import type { PageContext } from "../types.js";
+import type { ConversationTurn, PageContext } from "../types.js";
 
-/** A Commas tool as the LLM sees it — name/description/JSON-schema input, nothing else. */
+/** A tool as the LLM sees it — name/description/JSON-schema input, nothing else. */
 export interface LlmToolDef {
   name: string;
   description?: string;
@@ -20,8 +20,11 @@ export interface LlmStepInput {
   userPrompt: string;
   context?: PageContext;
   availableTools: LlmToolDef[];
-  /** Tool calls already made (and resolved) earlier in this same run. */
-  history: ToolCallRecord[];
+  /** Prior turns of this conversation (earlier messages), for real multi-turn memory —
+   * does NOT include the current userPrompt. Capped by the caller (runtime.ts). */
+  conversationHistory: ConversationTurn[];
+  /** Tool calls already made (and resolved) earlier in THIS turn only. */
+  toolHistory: ToolCallRecord[];
 }
 
 export type LlmStepResult =

@@ -53,10 +53,26 @@ export const SOURCES: SourceInfo[] = [
 /** Default per-chat scope: every currently connected source. */
 export const DEFAULT_ENABLED_SOURCES = ["commas", "google-calendar", "zoom", "fathom"] as const;
 
+/**
+ * Structured dispute context — attached whenever the agent panel opens from Dispute Detail
+ * so the agent has the facts without a tool call or the seller copy/pasting anything
+ * (PROTOTYPE_SPEC.md §2.11). Values mirror src/lib/disputeData.ts and the mock Commas MCP
+ * server's DISPUTES record (server/mcp/mockCommasServer.ts) — kept in sync by hand.
+ */
 export const DISPUTE_CONTEXT: PageContext = {
   kind: "dispute",
   id: "2481",
   label: "Dispute #2481 — Sarah Johnson",
+  dispute: {
+    customerName: "Sarah Johnson",
+    customerEmail: "sarah.johnson@email.com",
+    transactionId: "txn_8b3f2a1c9d",
+    amountCents: 49900,
+    reason: "product_not_received",
+    openedAt: "2026-08-09T00:00:00Z",
+    evidenceDueAt: "2026-08-13T00:00:00Z",
+    evidenceStatus: "not_started",
+  },
 };
 
 export const DASHBOARD_CONTEXT: PageContext = {
@@ -130,6 +146,7 @@ export const SEED_CHATS: Chat[] = [
     title: "Which discount codes get used the most?",
     createdAt: hoursAgo(26),
     updatedAt: hoursAgo(26),
+    status: "idle",
     enabledSources: ["commas"],
     messages: [
       {
@@ -155,6 +172,7 @@ export const SEED_CHATS: Chat[] = [
     title: "Sales summary — last 30 days",
     createdAt: hoursAgo(3),
     updatedAt: hoursAgo(3),
+    status: "idle",
     enabledSources: ["commas"],
     messages: [
       {

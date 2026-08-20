@@ -1,15 +1,23 @@
-import type { CommasMcpClient } from "../mcp/client.js";
+import type { SourceAdapter } from "../adapters/types.js";
 import type { RegisteredTool } from "./registry.js";
 import type { LlmClient, LlmToolDef, ToolCallRecord } from "../llm/types.js";
 import { AgentError, classifyError } from "./errors.js";
-import type { AgentRunResponse, PageContext, ProgressStep, SourceId, ToolSummaryItem } from "../types.js";
+import type {
+  AgentRunResponse,
+  ConversationTurn,
+  PageContext,
+  ProgressStep,
+  SourceId,
+  ToolSummaryItem,
+} from "../types.js";
 
 /**
- * The Agent runtime: User → Agent → LLM → MCP client → Commas MCP server → tool result →
- * LLM → next tool or final answer (docs/ARCHITECTURE.md §15). The Agent never calls Commas
- * directly — every data access goes through `mcpClient`, which speaks the MCP protocol to
- * whatever server it's connected to (mock or real, see server/mcp/client.ts). Swapping
- * `llmClient` for AnthropicLlmClient doesn't change a line of this file.
+ * The Agent runtime: User → Agent → LLM → source adapter → source → tool result → LLM →
+ * next tool or final answer (docs/ARCHITECTURE.md §15, extended for multiple sources). The
+ * Agent never talks to a source directly — every data access goes through the `SourceAdapter`
+ * registered for that tool's sourceId (server/adapters/), never a hardcoded per-source branch
+ * here. Write-classified tools always pause for approval (`pendingApproval`) instead of
+ * executing — `runAgentTurn` starts a run, `resumeAfterApproval` continues one past that pause.
  */
 
 const MAX_ITERATIONS = 6;
@@ -19,32 +27,116 @@ export interface RunAgentTurnArgs {
   prompt: string;
   enabledSources: SourceId[];
   context?: PageContext;
+  conversationHistory: ConversationTurn[];
   llmClient: LlmClient;
-  mcpClient: CommasMcpClient;
+  adapters: SourceAdapter[];
+  registry: Map<string, RegisteredTool>;
+}
+
+export interface ResumeAfterApprovalArgs {
+  decision: "approve" | "decline";
+  toolCallId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  /** The prompt that originally led to this pending approval — replayed so the LLM has the
+   * same question in view when it's asked to continue. */
+  prompt: string;
+  enabledSources: SourceId[];
+  context?: PageContext;
+  conversationHistory: ConversationTurn[];
+  llmClient: LlmClient;
+  adapters: SourceAdapter[];
   registry: Map<string, RegisteredTool>;
 }
 
 export async function runAgentTurn(args: RunAgentTurnArgs): Promise<AgentRunResponse> {
-  const { prompt, enabledSources, context, llmClient, mcpClient, registry } = args;
+  const { prompt, enabledSources, context, conversationHistory, llmClient, adapters, registry } = args;
+  return runLoop({
+    prompt,
+    context,
+    conversationHistory,
+    llmClient,
+    adapters,
+    registry,
+    availableTools: availableToolsFor(enabledSources, registry),
+    systemPrompt: buildSystemPrompt(context),
+    toolHistory: [],
+    steps: [],
+    toolSummary: [],
+    startIteration: 0,
+  });
+}
+
+export async function resumeAfterApproval(args: ResumeAfterApprovalArgs): Promise<AgentRunResponse> {
+  const { decision, toolCallId, toolName, input, prompt, enabledSources, context, conversationHistory, llmClient, adapters, registry } = args;
 
   const steps: ProgressStep[] = [];
   const toolSummary: ToolSummaryItem[] = [];
-  const history: ToolCallRecord[] = [];
+  const toolHistory: ToolCallRecord[] = [];
 
-  // Disabled sources are excluded from the tool set entirely (PROTOTYPE_SPEC.md §4.2) — every
-  // registered tool today is Commas-sourced, so this is the single gate for all of them.
-  const commasEnabled = enabledSources.includes("commas");
-  const availableTools: LlmToolDef[] = commasEnabled
-    ? Array.from(registry.values())
-        .filter((t) => t.classification === "read")
-        .map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }))
-    : [];
+  const registered = registry.get(toolName);
+  const sourceId: SourceId = registered?.sourceId ?? "commas";
+  const label = registered?.progressLabel ?? `Running ${toolName}…`;
 
-  const systemPrompt = buildSystemPrompt(context);
+  if (decision === "decline") {
+    steps.push({ id: `${sourceId}-${toolName}-declined`, sourceId, classification: "write", label: `Declined: ${registered?.displayName ?? toolName}` });
+    toolSummary.push({ sourceId, label: registered?.displayName ?? toolName, ok: false });
+    toolHistory.push({ toolCallId, toolName, input, result: { ok: false, data: "The user declined this action." } });
+  } else {
+    let ok = true;
+    let resultData: unknown = null;
+    try {
+      const adapter = findAdapter(adapters, sourceId);
+      if (!adapter) throw new AgentError("server_unavailable", `No adapter connected for ${sourceId}.`);
+      const toolResult = await withTimeout(adapter.callTool(toolName, input), TOOL_TIMEOUT_MS);
+      ok = !toolResult.isError;
+      resultData = toolResult.data;
+    } catch (err) {
+      ok = false;
+      resultData = classifyError(err).message;
+    }
+    steps.push({ id: `${sourceId}-${toolName}-approved`, sourceId, classification: "write", label });
+    toolSummary.push({ sourceId, label: registered?.displayName ?? toolName, ok });
+    toolHistory.push({ toolCallId, toolName, input, result: { ok, data: resultData } });
+  }
+
+  return runLoop({
+    prompt,
+    context,
+    conversationHistory,
+    llmClient,
+    adapters,
+    registry,
+    availableTools: availableToolsFor(enabledSources, registry),
+    systemPrompt: buildSystemPrompt(context),
+    toolHistory,
+    steps,
+    toolSummary,
+    startIteration: 1,
+  });
+}
+
+interface LoopState {
+  prompt: string;
+  context?: PageContext;
+  conversationHistory: ConversationTurn[];
+  llmClient: LlmClient;
+  adapters: SourceAdapter[];
+  registry: Map<string, RegisteredTool>;
+  availableTools: LlmToolDef[];
+  systemPrompt: string;
+  toolHistory: ToolCallRecord[];
+  steps: ProgressStep[];
+  toolSummary: ToolSummaryItem[];
+  startIteration: number;
+}
+
+async function runLoop(state: LoopState): Promise<AgentRunResponse> {
+  const { prompt, context, conversationHistory, llmClient, adapters, registry, availableTools, systemPrompt, toolHistory, steps, toolSummary, startIteration } = state;
 
   try {
-    for (let i = 0; i < MAX_ITERATIONS; i++) {
-      const step = await llmClient.nextStep({ systemPrompt, userPrompt: prompt, context, availableTools, history });
+    for (let i = startIteration; i < MAX_ITERATIONS; i++) {
+      const step = await llmClient.nextStep({ systemPrompt, userPrompt: prompt, context, availableTools, conversationHistory, toolHistory });
 
       if (step.type === "final") {
         return { steps, answer: step.text, toolSummary };
@@ -52,12 +144,31 @@ export async function runAgentTurn(args: RunAgentTurnArgs): Promise<AgentRunResp
 
       const registered = registry.get(step.toolName);
       const sourceId: SourceId = registered?.sourceId ?? "commas";
+      const classification = registered?.classification ?? "write";
       const label = registered?.progressLabel ?? `Running ${step.toolName}…`;
+
+      // Write tools never auto-execute — pause here and let the client round-trip through
+      // POST /api/agent/approve (resumeAfterApproval) before anything runs.
+      if (classification === "write") {
+        return {
+          steps,
+          answer: "",
+          toolSummary,
+          pendingApproval: {
+            toolCallId: step.toolCallId,
+            toolName: step.toolName,
+            input: step.input,
+            summary: buildApprovalSummary(registered, step.input),
+          },
+        };
+      }
 
       let ok = true;
       let resultData: unknown = null;
       try {
-        const toolResult = await withTimeout(mcpClient.callTool(step.toolName, step.input), TOOL_TIMEOUT_MS);
+        const adapter = findAdapter(adapters, sourceId);
+        if (!adapter) throw new AgentError("server_unavailable", `No adapter connected for ${sourceId}.`);
+        const toolResult = await withTimeout(adapter.callTool(step.toolName, step.input), TOOL_TIMEOUT_MS);
         ok = !toolResult.isError;
         resultData = toolResult.data;
       } catch (err) {
@@ -67,14 +178,9 @@ export async function runAgentTurn(args: RunAgentTurnArgs): Promise<AgentRunResp
         resultData = classifyError(err).message;
       }
 
-      steps.push({
-        id: `${sourceId}-${step.toolName}-${i}`,
-        sourceId,
-        classification: registered?.classification ?? "write",
-        label,
-      });
+      steps.push({ id: `${sourceId}-${step.toolName}-${i}`, sourceId, classification, label });
       toolSummary.push({ sourceId, label: registered?.displayName ?? step.toolName, ok });
-      history.push({ toolCallId: step.toolCallId, toolName: step.toolName, input: step.input, result: { ok, data: resultData } });
+      toolHistory.push({ toolCallId: step.toolCallId, toolName: step.toolName, input: step.input, result: { ok, data: resultData } });
     }
 
     return {
@@ -90,13 +196,44 @@ export async function runAgentTurn(args: RunAgentTurnArgs): Promise<AgentRunResp
   }
 }
 
+function findAdapter(adapters: SourceAdapter[], sourceId: SourceId) {
+  return adapters.find((a) => a.sourceId === sourceId);
+}
+
+/** Tools from every source enabled for this chat — read AND write (the LLM must be able to
+ * see a write tool exists to propose it; the runtime, not tool visibility, is what gates
+ * execution). */
+function availableToolsFor(enabledSources: SourceId[], registry: Map<string, RegisteredTool>): LlmToolDef[] {
+  return Array.from(registry.values())
+    .filter((t) => enabledSources.includes(t.sourceId))
+    .map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
+}
+
+function buildApprovalSummary(registered: RegisteredTool | undefined, input: Record<string, unknown>): string {
+  if (registered?.name === "commas_mark_dispute_response_ready") {
+    const id = typeof input.dispute_id === "string" ? input.dispute_id : "this dispute";
+    return `Mark the evidence response for Dispute #${id} as ready to submit. (Simulated — nothing is actually sent anywhere.)`;
+  }
+  return `Run ${registered?.displayName ?? "this action"}.`;
+}
+
 function buildSystemPrompt(context?: PageContext): string {
   const base =
-    "You are the Commas AI Agent. Help the seller by looking up customers, transactions, " +
-    "and disputes in Commas using the available tools. Be concise and direct. Never state a " +
-    "fact about their data that didn't come from a tool result.";
+    "You are the Commas AI Agent. Help the seller by looking up customers, transactions, and " +
+    "disputes in Commas, and by checking their connected apps (Google Calendar, Zoom, Fathom, " +
+    "Gmail, CRM) when useful. Be concise and direct. Never state a fact about their data that " +
+    "didn't come from a tool result. Decide for yourself which tools you need and in what " +
+    "order — don't assume a fixed sequence.";
+
   if (context?.kind === "dispute") {
-    return `${base} The seller is currently viewing ${context.label} — assume questions about "this dispute" refer to it.`;
+    const d = context.dispute;
+    const facts = d
+      ? ` Known facts: customer ${d.customerName} (${d.customerEmail}), transaction ${d.transactionId}, ` +
+        `$${(d.amountCents / 100).toFixed(2)}, reason "${d.reason}", opened ${d.openedAt}, evidence due ` +
+        `${d.evidenceDueAt}, response status "${d.evidenceStatus}". Use these directly — don't re-fetch ` +
+        `what you already know.`
+      : "";
+    return `${base} The seller is currently viewing ${context.label} — assume questions about "this dispute" refer to it.${facts}`;
   }
   return base;
 }

@@ -12,7 +12,13 @@ describe("CommasMcpClient — mock mode (real MCP protocol, in-process transport
     client = await CommasMcpClient.connectMock();
     const tools = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ["commas_get_dispute", "fanbasis_get_transaction", "fanbasis_list_customers", "fanbasis_list_transactions"].sort(),
+      [
+        "commas_get_dispute",
+        "commas_mark_dispute_response_ready",
+        "fanbasis_get_transaction",
+        "fanbasis_list_customers",
+        "fanbasis_list_transactions",
+      ].sort(),
     );
   });
 

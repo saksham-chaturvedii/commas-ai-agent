@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { ChatStoreProvider, useChatStore } from "../src/hooks/useChatStore";
 import { ChatWorkspace } from "../src/components/chat/ChatWorkspace";
 import type { Chat } from "../src/lib/types";
@@ -28,10 +28,13 @@ function mockFetchOnce(body: unknown) {
 describe("chat flow (wired to the real agent backend over POST /api/agent/run)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    localStorage.clear();
   });
   afterEach(() => {
+    cleanup();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    localStorage.clear();
   });
 
   it("shows the empty state with suggested capabilities for a fresh chat", () => {
@@ -44,7 +47,7 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
     expect(screen.getByText("Summarize my sales")).toBeInTheDocument();
   });
 
-  it("clicking a suggestion calls the agent backend and renders its real response", async () => {
+  it("clicking a suggestion calls the agent backend (with empty history on a fresh chat) and renders its real response", async () => {
     const fetchMock = mockFetchOnce({
       steps: [
         { id: "commas-1", sourceId: "commas", classification: "read", label: "Checking transaction history…" },
@@ -68,7 +71,6 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
     // user message appears immediately, before the network call resolves
     expect(screen.getByText("Summarize my sales this month")).toBeInTheDocument();
 
-    // the request went to the real backend endpoint with the right shape
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/agent/run",
       expect.objectContaining({
@@ -77,6 +79,7 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
           prompt: "Summarize my sales this month",
           enabledSources: ["commas", "google-calendar", "zoom", "fathom"],
           context: undefined,
+          history: [],
         }),
       }),
     );
@@ -87,6 +90,36 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
 
     expect(screen.getByText("Found 1 transaction totaling $499.00.")).toBeInTheDocument();
     expect(screen.getByText(/Checked 2 sources/)).toBeInTheDocument();
+  });
+
+  it("sends prior messages as history on a second turn (multi-turn memory)", async () => {
+    mockFetchOnce({ steps: [], answer: "First answer.", toolSummary: [] });
+
+    render(
+      <ChatStoreProvider>
+        <Harness />
+      </ChatStoreProvider>,
+    );
+
+    fireEvent.click(screen.getByText("Summarize my sales"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(screen.getByText("First answer.")).toBeInTheDocument();
+
+    const secondFetchMock = mockFetchOnce({ steps: [], answer: "Second answer.", toolSummary: [] });
+    fireEvent.change(screen.getByPlaceholderText("Ask about your business…"), { target: { value: "And what else?" } });
+    fireEvent.keyDown(screen.getByPlaceholderText("Ask about your business…"), { key: "Enter" });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    const secondCallBody = JSON.parse(secondFetchMock.mock.calls[0][1].body);
+    expect(secondCallBody.history).toEqual([
+      { role: "user", text: "Summarize my sales this month" },
+      { role: "assistant", text: "First answer." },
+    ]);
   });
 
   it("renders a clean error state when the agent backend reports a failure", async () => {
@@ -115,10 +148,7 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
   });
 
   it("shows a clean error state when the backend is unreachable (network failure)", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockRejectedValue(new TypeError("Failed to fetch")),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
 
     render(
       <ChatStoreProvider>
@@ -133,5 +163,82 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
     });
 
     expect(screen.getByText(/Couldn't reach the agent/)).toBeInTheDocument();
+  });
+
+  it("renders an approval card for a write action, and only sends it after Approve", async () => {
+    mockFetchOnce({
+      steps: [],
+      answer: "",
+      toolSummary: [],
+      pendingApproval: {
+        toolCallId: "call-1",
+        toolName: "commas_mark_dispute_response_ready",
+        summary: "Mark the evidence response for Dispute #2481 as ready to submit.",
+        input: { dispute_id: "2481" },
+      },
+    });
+
+    render(
+      <ChatStoreProvider>
+        <Harness />
+      </ChatStoreProvider>,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Ask about your business…"), { target: { value: "mark the response ready" } });
+    fireEvent.keyDown(screen.getByPlaceholderText("Ask about your business…"), { key: "Enter" });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(screen.getByText("Mark the evidence response for Dispute #2481 as ready to submit.")).toBeInTheDocument();
+
+    const approveMock = mockFetchOnce({ steps: [], answer: "Done — marked ready.", toolSummary: [] });
+    fireEvent.click(screen.getByText("Approve"));
+
+    expect(approveMock).toHaveBeenCalledWith(
+      "/api/agent/approve",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"decision":"approve"'),
+      }),
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(screen.getByText("Done — marked ready.")).toBeInTheDocument();
+  });
+
+  it("persists chats to localStorage and restores them on a fresh provider mount (reload simulation)", async () => {
+    mockFetchOnce({ steps: [], answer: "Persisted answer.", toolSummary: [] });
+
+    const { unmount } = render(
+      <ChatStoreProvider>
+        <Harness />
+      </ChatStoreProvider>,
+    );
+    fireEvent.click(screen.getByText("Summarize my sales"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(screen.getByText("Persisted answer.")).toBeInTheDocument();
+    unmount();
+
+    // A fresh provider (simulating a page reload) should hydrate from localStorage, not the
+    // seed data — read state directly rather than through Harness (which always creates a
+    // new empty chat on mount, which would otherwise mask whether persistence worked).
+    function ReadOnlyHarness() {
+      const { chats } = useChatStore();
+      const persisted = chats.find((c) => c.messages.some((m) => m.text === "Persisted answer."));
+      return <div>{persisted ? `found: ${persisted.title}` : "not found"}</div>;
+    }
+    render(
+      <ChatStoreProvider>
+        <ReadOnlyHarness />
+      </ChatStoreProvider>,
+    );
+    expect(screen.getByText(/^found:/)).toBeInTheDocument();
   });
 });

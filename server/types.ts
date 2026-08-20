@@ -7,10 +7,22 @@
 
 export type SourceId = "commas" | "google-calendar" | "zoom" | "fathom" | "gmail" | "crm";
 
+export interface DisputeContextDetail {
+  customerName: string;
+  customerEmail: string;
+  transactionId: string;
+  amountCents: number;
+  reason: string;
+  openedAt: string;
+  evidenceDueAt: string;
+  evidenceStatus: "not_started" | "in_progress" | "ready";
+}
+
 export interface PageContext {
   kind: "dispute" | "dashboard";
   id: string;
   label: string;
+  dispute?: DisputeContextDetail;
 }
 
 export type ToolClassification = "read" | "write";
@@ -28,11 +40,39 @@ export interface ToolSummaryItem {
   ok: boolean;
 }
 
+/** One prior turn of the conversation — role + final text only, no tool internals, kept lean
+ * (a capped window, not the full history — see runtime.ts's HISTORY_TURN_LIMIT). */
+export interface ConversationTurn {
+  role: "user" | "assistant";
+  text: string;
+}
+
+export interface PendingApproval {
+  toolCallId: string;
+  toolName: string;
+  summary: string;
+  input: Record<string, unknown>;
+}
+
 /** Request body for POST /api/agent/run. */
 export interface AgentRunRequest {
   prompt: string;
   enabledSources: SourceId[];
   context?: PageContext;
+  history?: ConversationTurn[];
+}
+
+/** Request body for POST /api/agent/approve — resumes a run paused on a write tool. */
+export interface AgentApproveRequest {
+  decision: "approve" | "decline";
+  toolCallId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  /** The prompt that originally led to this pending approval — replayed on resume. */
+  prompt: string;
+  enabledSources: SourceId[];
+  context?: PageContext;
+  history?: ConversationTurn[];
 }
 
 export type AgentErrorCode =
@@ -44,10 +84,13 @@ export type AgentErrorCode =
   | "empty_result"
   | "unknown";
 
-/** Response body for POST /api/agent/run. On failure, `error` is set and steps/answer describe what happened up to that point. */
+/** Response body for POST /api/agent/run and /api/agent/approve. */
 export interface AgentRunResponse {
   steps: ProgressStep[];
   answer: string;
   toolSummary: ToolSummaryItem[];
   error?: { code: AgentErrorCode; message: string };
+  /** Set instead of a final answer when the agent wants to run a write tool — the run pauses
+   * here until the client calls /api/agent/approve. */
+  pendingApproval?: PendingApproval;
 }

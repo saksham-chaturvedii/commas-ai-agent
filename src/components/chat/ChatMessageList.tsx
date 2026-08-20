@@ -3,15 +3,17 @@ import type { Chat } from "../../lib/types";
 import { useChatStore } from "../../hooks/useChatStore";
 import { ChatMessageBubble } from "./ChatMessageBubble";
 import { ProgressBlock } from "./ProgressBlock";
+import { ApprovalCard } from "./ApprovalCard";
 
 export function ChatMessageList({ chat }: { chat: Chat }) {
-  const { runChatId, runPhase, runSteps, visibleStepIds } = useChatStore();
+  const { runChatId, runPhase, runSteps, visibleStepIds, pendingApproval } = useChatStore();
   const isRunningHere = runChatId === chat.id && runPhase === "running";
+  const isAwaitingApprovalHere = pendingApproval?.chatId === chat.id && runPhase === "awaiting_approval";
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
-  }, [chat.messages.length, isRunningHere, visibleStepIds.length]);
+  }, [chat.messages.length, isRunningHere, isAwaitingApprovalHere, visibleStepIds.length]);
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
@@ -24,6 +26,11 @@ export function ChatMessageList({ chat }: { chat: Chat }) {
             <div className="chat-bubble-agent">
               <ProgressBlock steps={runSteps} visibleStepIds={visibleStepIds} />
             </div>
+          </div>
+        )}
+        {isAwaitingApprovalHere && pendingApproval && (
+          <div className="flex justify-start">
+            <ApprovalCard approval={pendingApproval} />
           </div>
         )}
         <div ref={bottomRef} />

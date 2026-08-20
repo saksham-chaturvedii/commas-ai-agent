@@ -53,20 +53,45 @@ export interface ChatMessage {
   toolSummary?: ToolSummaryItem[];
 }
 
+/** Structured dispute facts, attached to dispute-context chats so the agent has them without
+ * a tool call or the user copy/pasting anything (PROTOTYPE_SPEC.md §2.11). */
+export interface DisputeContextDetail {
+  customerName: string;
+  customerEmail: string;
+  transactionId: string;
+  amountCents: number;
+  reason: string;
+  openedAt: string;
+  evidenceDueAt: string;
+  evidenceStatus: "not_started" | "in_progress" | "ready";
+}
+
 export interface PageContext {
   kind: "dispute" | "dashboard";
   id: string;
   label: string;
+  dispute?: DisputeContextDetail;
 }
+
+export type ChatStatus = "idle" | "running" | "error";
 
 export interface Chat {
   id: string;
   title: string;
   createdAt: string;
   updatedAt: string;
+  status: ChatStatus;
   enabledSources: SourceId[];
   context?: PageContext;
   messages: ChatMessage[];
+}
+
+/** A tool call awaiting seller approval before it executes (write actions only). */
+export interface PendingApproval {
+  toolCallId: string;
+  toolName: string;
+  summary: string;
+  input: Record<string, unknown>;
 }
 
 export interface CreditsState {

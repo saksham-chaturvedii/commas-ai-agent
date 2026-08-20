@@ -13,12 +13,13 @@ import { z } from "zod";
  * "Product not received", purchased Aug 2 2026, evidence due Aug 13) — kept in sync by hand.
  *
  * Tool set is deliberately small per the task's scope: customers, transactions, and the one
- * dispute in this prototype's scenario. `commas_get_dispute` is namespaced `commas_` (not
- * `fanbasis_`) because the real Commas platform has no disputes API/MCP tool — confirmed gap,
- * documented in docs/active-context.md. Write tools are NOT implemented here: the real
- * platform supports them, but this repo has no approval-card UI yet (see
- * docs/PROTOTYPE_SPEC.md §4.6) — shipping a write tool with no confirmation gate would be
- * unsafe, so it's deferred rather than faked.
+ * dispute in this prototype's scenario. `commas_get_dispute` and `commas_mark_dispute_
+ * response_ready` are namespaced `commas_` (not `fanbasis_`) because the real Commas platform
+ * has no disputes API/evidence-submission API at all — confirmed gap, documented in
+ * docs/active-context.md. `commas_mark_dispute_response_ready` is classified "write" in the
+ * tool registry (server/agent/registry.ts) and therefore always pauses for seller approval
+ * before running (server/agent/runtime.ts) — it never auto-executes, and it only ever flips a
+ * mock in-memory flag; nothing is submitted anywhere real.
  */
 
 interface MockCustomer {
@@ -44,6 +45,7 @@ interface MockDispute {
   customerEmail: string;
   openedAt: string;
   evidenceDueAt: string;
+  responseStatus: "not_started" | "in_progress" | "ready";
 }
 
 const CUSTOMERS: MockCustomer[] = [
@@ -70,6 +72,7 @@ const DISPUTES: MockDispute[] = [
     customerEmail: "sarah.johnson@email.com",
     openedAt: "2026-08-09T00:00:00Z",
     evidenceDueAt: "2026-08-13T00:00:00Z",
+    responseStatus: "not_started",
   },
 ];
 
@@ -141,6 +144,24 @@ export function createMockCommasServer(): McpServer {
       const dispute = DISPUTES.find((d) => d.id === id);
       if (!dispute) return errorResult(`Dispute not found: ${id}`);
       return textResult({ dispute });
+    },
+  );
+
+  server.registerTool(
+    "commas_mark_dispute_response_ready",
+    {
+      title: "Mark dispute response ready",
+      description:
+        "Mark a dispute's evidence response as ready to submit. Prototype-only, simulated — " +
+        "the real Commas platform has no evidence-submission API; this only flips a mock flag " +
+        "and is never actually sent anywhere. Always requires seller confirmation before running.",
+      inputSchema: { dispute_id: z.string() },
+    },
+    async ({ dispute_id }) => {
+      const dispute = DISPUTES.find((d) => d.id === dispute_id);
+      if (!dispute) return errorResult(`Dispute not found: ${dispute_id}`);
+      dispute.responseStatus = "ready";
+      return textResult({ dispute, simulated: true });
     },
   );
 
