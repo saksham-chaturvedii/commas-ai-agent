@@ -1,4 +1,4 @@
-import { ChevronDown, Sparkles, Plus, Settings, CircleHelp, Bell } from "lucide-react";
+import { ChevronDown, Sparkles, Plus, Settings, CircleHelp, Bell, Circle } from "lucide-react";
 import { CommaMark } from "./CommaMark";
 
 const ICON_BUTTONS = [
@@ -48,6 +48,15 @@ export function TopNav() {
           </button>
         ))}
       </div>
+
+      {/* onboarding pill — visual-only, matches production's "Finish setup" control */}
+      <button
+        type="button"
+        className="inline-flex items-center gap-1.5 h-9 pl-2.5 pr-3.5 ml-2 rounded-full bg-[#171717] text-white text-[13.5px] font-medium shrink-0 whitespace-nowrap hover:bg-[#262626] transition-colors"
+      >
+        <Circle size={14} strokeWidth={2} className="text-white/70" />
+        Finish setup
+      </button>
     </header>
   );
 }

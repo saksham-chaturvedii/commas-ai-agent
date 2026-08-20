@@ -1,6 +1,14 @@
 # Commas AI Agent — Active Context
 
-**Last updated:** 2026-08-21 · **Updated by:** Claude (conversation system / source adapters / write-approval session)
+**Last updated:** 2026-08-21 · **Updated by:** Claude (Dashboard visual fidelity pass)
+
+> **The Dashboard has been rebuilt against real Commas production screenshots** (not invented,
+> not ported from `commas-ai-copilot` — that repo has no Dashboard). See "Dashboard Visual
+> Fidelity Pass" below for the full account: components built, what's faithfully reproduced vs.
+> intentionally adapted for narrative coherence with Resolution Center, and what's still
+> visually approximate. Resolution Center and the AI Agent were verified untouched. 48/48 tests
+> pass, 0 console errors across a full click-through (Dashboard → AI panel → Resolution Center
+> → Dispute Detail → contextual AI panel).
 
 > **Persistent multi-turn conversations, a real multi-source adapter layer, and a write/
 > approval flow now exist.** See "Conversation System, Source Adapters & Write-Approval Flow"
@@ -779,10 +787,138 @@ per the scope decision stated at the top of this section:
 
 Both remain open — see "Next Steps" below.
 
+# Dashboard Visual Fidelity Pass (2026-08-21)
+
+The task opened by explicitly correcting a wrong assumption from an earlier session: this
+repo's Dashboard was "visually too simplified" (a bare 3-stat placeholder), and — critically —
+**`commas-ai-copilot` has no Dashboard to port from at all.** Reconnaissance confirmed this
+directly (`find src -iname "*dashboard*"` in that repo returns nothing; it only has the Commas
+application shell + Resolution Center + the old scripted `EvidenceCopilot`). So the Dashboard
+had to be built fresh, using four new production Commas screenshots
+(`docs/references/Screenshot 2026-08-21 at 4.27.*.png`, captured live from `commas.com`) as the
+structural source of truth, while everything *around* the Dashboard (shell, typography, cards,
+Resolution Center) had to keep using this repo's already-established design language rather
+than inventing a second one.
+
+## What was built
+
+- **`src/components/dashboard/`** (new directory, 6 components):
+  - `MiniChart.tsx` — a hand-rolled SVG sparkline (no charting library added, per the explicit
+    "no unnecessary dependencies" constraint): faint gridlines, a stroked line, a dot at the
+    last point, x-axis labels. Reused by every chart-bearing card.
+  - `RevenueModule.tsx` — the hero Revenue card: heading, D/W/M/Y segmented toggle (mock,
+    `D` active), dollar amount, date with chevron, a small "‹ Updated 4:27 AM" time/range line
+    (added in the correction pass below — the task's own Revenue-module checklist named this
+    explicitly and the first draft missed it), and the chart.
+  - `AnnouncementsModule.tsx` — heading, prev/next nav arrows, an image area, title/caption,
+    pagination dots. The production card's photo (a branded truck) is replaced with a gradient
+    + wordmark placeholder — deliberately not attempting to fabricate realistic product
+    photography; the structure and copy ("Welcome to Commas" / "The new era for making money on
+    the internet.") are reproduced, the image is an honest mock.
+  - `OverviewControls.tsx` — the Date range / Daily / Compare-to pill row plus Add/Edit buttons,
+    matching production's toolbar exactly. Non-functional, as instructed for this phase.
+  - `OverviewCard.tsx` — exports two variants: `OverviewCard` (populated metric: heading, value,
+    "X last period" delta, sparkline) and `OverviewEmptyCard` (heading, illustration, caption,
+    optional CTA) — production's genuine empty-state treatment.
+  - `EmptyIllustration.tsx` — a small stacked-card mock (two overlapping rounded rectangles)
+    standing in for production's blurred illustration inside empty cards.
+- **`src/pages/DashboardPage.tsx`** — fully rewritten to compose the above: welcome heading,
+  Revenue + Announcements hero row, "Overview" heading, controls, then an 8-card 3-column grid
+  (Gross revenue, Top payment methods, Spend per customer, New customers, Credit score
+  distribution, Disputed payments, Dispute activity, Net revenue) — the exact card set and
+  layout from the production screenshots, including the asymmetric last row (2 cards, one
+  empty cell), which production also has.
+- **`src/components/shell/TopNav.tsx`** — added the trailing black "Finish setup" pill visible
+  in every production screenshot (static circle icon + label, non-functional, matching
+  position/order after the existing +/settings/help/bell cluster). Nothing else in `TopNav` or
+  `Sidebar` changed — both already matched production closely from an earlier session's
+  "Commas Foundation Migration" pass (glass org pill, AI search field, icon-rail nav with the
+  same active-state treatment), confirmed by direct comparison against the new screenshots
+  rather than assumed.
+- **`src/index.css`** — two new utility classes, added next to the existing shared recipes
+  rather than a new stylesheet: `.segment-control` (the D/W/M/Y toggle) and `.overview-pill`
+  (the Overview toolbar pills). Both reuse the existing color tokens/radius scale, no new design
+  system introduced.
+
+## Deliberate departure from a literal production copy: coherent mock numbers, not $0.00
+
+Production's screenshots show a genuinely empty demo account — every figure is `$0.00` / `0`,
+and the Disputed payments card reads "All clear — no disputes this period." Copying that
+literally would have put a "no disputes" claim on the Dashboard one click away from Resolution
+Center's actual open dispute (#2481, Sarah Johnson, $499) — a direct contradiction, and exactly
+the kind of incoherence Phase 4 of the task asked to avoid ("must feel like they belong to the
+same product"). The judgment call made here: reproduce production's *structure and empty-state
+treatment* exactly, but populate most cards with plausible mock numbers consistent with this
+prototype's existing world (the same $18,420/62-transaction figures the old placeholder
+Dashboard already used, plus a Disputed payments / Dispute activity pair that reflects the real
+$499 dispute) — while still keeping two cards as **faithful, verbatim empty states** (Top
+payment methods: "Payment methods will appear here once sales come in"; Credit score
+distribution: "Enrich your first lead to see credit insights" + "Go to Qualifier App" CTA),
+since this prototype genuinely has no backing mock data for either and the task was explicit
+that empty states must never be blank white space.
+
+## Resolution Center & AI Agent — verified untouched, not just assumed
+
+No files under `src/components/resolution/` were opened for editing this session. No files
+under `src/hooks/useChatStore.tsx`, `src/components/chat/`, or `server/` were touched either —
+this was a frontend-only Dashboard pass. Verified live (screenshots retained in job scratch
+space), not just by inspection:
+
+1. Dashboard renders fully, floating AI button visible bottom-right.
+2. Opening the AI panel from the Dashboard shows the Notion-AI-style docked layout — the
+   Dashboard stays completely visible and interactive to its left, matching Phase 5's explicit
+   requirement (not an overlay, not a separate app).
+3. Navigating to Resolution Center → the dispute list (Sarah Johnson row, tabs, filter pills,
+   Export) renders pixel-identical to before.
+4. Opening the dispute detail → the evidence checklist, dispute/customer/transaction cards, and
+   "Investigate with AI" button are all unchanged.
+5. Clicking "Investigate with AI" → the right panel correctly re-contextualizes from
+   "Dashboard" to "Dispute #2481 — Sarah Johnson" with the dispute-specific suggestion chips
+   ("Help me resolve this dispute," "Draft an evidence response," etc.) — the existing
+   contextual-AI wiring from an earlier session is completely intact.
+
+Zero console errors across the entire click-through.
+
+## Automated verification
+
+- `npx tsc -b` — clean, 0 errors.
+- `npm run lint` — clean, 0 errors/warnings.
+- `npx vitest run` — **48/48 passing, unchanged** from before this pass (no test touches
+  Dashboard markup directly, so this is a true no-regression signal, not just a re-run).
+
+## Remaining visual differences from production (honest gaps, not hidden)
+
+- **The Announcements card's image is a gradient placeholder**, not the branded photograph
+  production shows — an intentional mock, not an oversight (see above).
+- **No carousel motion.** Production's Announcements card visibly peeks a second card at its
+  right edge (implying horizontal scroll/carousel); this version renders one static card with
+  non-functional nav arrows and pagination dots. The `<`/`>` buttons and dots are present for
+  structural fidelity but don't do anything yet.
+- **The D/W/M/Y toggle and Overview pills are visual-only** — clicking them doesn't change any
+  data, per this phase's explicit scope ("build the UI... for now").
+- **Chart tooltips aren't implemented.** Production's Net revenue chart shows a hoverable
+  tooltip with a draggable point (`Net Revenue / Aug 16: $0.00 / Aug 9: $0.00`); this version's
+  `MiniChart` is a static SVG with no interaction.
+- **No responsive/narrow-width Dashboard testing was done this pass** — verification ran at
+  1440px only. The existing Sidebar/RightPanel responsive fixes from an earlier session
+  (P0/P1 fix pass) are untouched and should still hold, but the new Dashboard grid specifically
+  wasn't checked below 1440px.
+
+## What this pass explicitly did NOT do (per the task's own constraints)
+
+No real OAuth, no real MCP calls, no real LLM calls, no Agent/MCP architecture changes, no
+Resolution Center rewrite, no new design system, no new dependencies. This was scoped
+exclusively to Dashboard visual fidelity + confirming the existing AI Agent integration and
+Resolution Center survive it — nothing else was in scope and nothing else was touched.
+
 # Current Repository State
 
 - `docs/` — full spec set (`PROTOTYPE_SPEC.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,
-  this file) + `docs/references/` (10 UX screenshots).
+  this file) + `docs/references/` (14 UX screenshots — 10 earlier + 4 new production Commas
+  Dashboard captures used for "Dashboard Visual Fidelity Pass" above).
+- `src/components/dashboard/` — the Dashboard's 6 new components (`MiniChart`, `RevenueModule`,
+  `AnnouncementsModule`, `OverviewControls`, `OverviewCard`/`OverviewEmptyCard`,
+  `EmptyIllustration`) — see "Dashboard Visual Fidelity Pass" above.
 - **A real, running Vite + React 18 + TypeScript + Tailwind v4 frontend** on the ported
   Commas shell, plus **a real Node/TypeScript/Hono backend** (`server/`) implementing the
   agent runtime, MCP client, and mock Commas MCP server — see "Commas Tool Layer" above for
@@ -841,15 +977,26 @@ Both remain open — see "Next Steps" below.
   **Explicitly not done this session** (see that section's closing note): the 7-flow
   stabilization audit and the dedicated visual polish pass — both were part of the same
   request batch but out of scope for this session's rigor budget.
+- **Dashboard visual fidelity pass** (2026-08-21) — rebuilt the Dashboard from scratch against
+  4 new production Commas screenshots (`commas-ai-copilot` has no Dashboard to port from),
+  keeping Resolution Center and the AI Agent completely untouched — see "Dashboard Visual
+  Fidelity Pass" above for the full account, including the deliberate departure from
+  production's literal `$0.00` empty-account numbers (for narrative coherence with Resolution
+  Center's real dispute) and the honestly-listed remaining gaps (carousel motion, chart
+  tooltips, narrow-width testing). Verified: typecheck/lint/48 tests (unchanged, true
+  no-regression signal) + a live 5-screenshot browser walkthrough (Dashboard → AI panel →
+  Resolution Center list → dispute detail → contextual AI panel), zero console errors.
 
 # In Progress
 
-- Nothing implementation-wise. **Next up, in priority order:** (1) the stabilization audit
-  (7 named flows) and the visual polish pass, both requested this session and explicitly
-  deferred — see the closing note in "Conversation System, Source Adapters & Write-Approval
-  Flow" above; (2) get an `ANTHROPIC_API_KEY` from the user and confirm the real
-  `AnthropicLlmClient` path live (still real code, never actually invoked); (3) remaining
-  `fanbasis_*` read tools / SSE streaming, unchanged from before this session.
+- Nothing implementation-wise. **Next up, in priority order:** (1) the 7-flow stabilization
+  audit and a dedicated cross-surface visual polish pass (typography/spacing/border/shadow
+  comparison), both requested two sessions ago and still deferred; (2) Dashboard's own listed
+  gaps if visual completeness matters more than new features right now: Announcements carousel
+  motion, chart hover tooltips, narrow-width (<1440px) testing of the new grid; (3) get an
+  `ANTHROPIC_API_KEY` from the user and confirm the real `AnthropicLlmClient` path live (still
+  real code, never actually invoked); (4) remaining `fanbasis_*` read tools / SSE streaming,
+  unchanged from before this session.
 
 # Not Implemented
 

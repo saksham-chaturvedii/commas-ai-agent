@@ -316,6 +316,59 @@ body {
     0 4px 6px -4px rgba(0, 0, 0, 0.1);
 }
 
+/* ---- dashboard-specific utilities ---- */
+
+.segment-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: #f1f2f4;
+  border-radius: 10px;
+}
+
+.segment-control button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 26px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #6b7280;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.segment-control button[data-active="true"] {
+  background: #ffffff;
+  color: var(--color-text-primary);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 0 0 1px rgba(16, 24, 40, 0.04);
+}
+
+.overview-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 9999px;
+  color: var(--color-text-primary);
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  font-weight: 400;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  white-space: nowrap;
+}
+
 /* ---- chat-specific utilities ---- */
 
 .chat-bubble-user {
