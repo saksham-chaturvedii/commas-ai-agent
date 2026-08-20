@@ -1,0 +1,295 @@
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import type {
+  Chat,
+  ChatMessage,
+  CreditsState,
+  PageContext,
+  ProgressStep,
+  RunPhase,
+  SourceId,
+  SourceInfo,
+} from "../lib/types";
+import { INITIAL_CREDITS, SEED_CHATS, SOURCES } from "../lib/mockData";
+import { planMockRun } from "../lib/mockEngine";
+
+/**
+ * Shared chat state for the UI foundation pass. This is a frontend-only stand-in for
+ * docs/ARCHITECTURE.md §10's backend ChatStore + §4's agent runtime + §9's SSE event stream —
+ * everything here is client-side React state (no persistence beyond the page session), and
+ * `planMockRun` (src/lib/mockEngine.ts) stands in for the real agent loop. See
+ * docs/active-context.md "What remains mocked" for the full list.
+ */
+
+const STEP_INTERVAL_MS = 650;
+const CREDIT_COST_PER_MESSAGE = 1;
+const CREDIT_COST_PER_STEP = 1;
+
+interface ChatStoreValue {
+  chats: Chat[];
+  sources: SourceInfo[];
+  credits: CreditsState;
+  runChatId: string | null;
+  runPhase: RunPhase;
+  runSteps: ProgressStep[];
+  visibleStepIds: string[];
+  createChat: (context?: PageContext) => string;
+  deleteChat: (id: string) => void;
+  sendMessage: (chatId: string, text: string) => void;
+  cancelRun: () => void;
+  toggleChatSource: (chatId: string, sourceId: SourceId) => void;
+  connectSource: (sourceId: SourceId) => void;
+  disconnectSource: (sourceId: SourceId) => void;
+  resetDemo: () => void;
+}
+
+const ChatStoreContext = createContext<ChatStoreValue | null>(null);
+
+function newId(prefix: string) {
+  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function chatTitleFrom(text: string) {
+  const trimmed = text.trim();
+  return trimmed.length > 60 ? `${trimmed.slice(0, 57)}…` : trimmed;
+}
+
+export function ChatStoreProvider({ children }: { children: ReactNode }) {
+  const [chats, setChats] = useState<Chat[]>(SEED_CHATS);
+  const [sources, setSources] = useState<SourceInfo[]>(SOURCES);
+  const [credits, setCredits] = useState<CreditsState>(INITIAL_CREDITS);
+  const [runChatId, setRunChatId] = useState<string | null>(null);
+  const [runPhase, setRunPhase] = useState<RunPhase>("idle");
+  const [runSteps, setRunSteps] = useState<ProgressStep[]>([]);
+  const [visibleStepIds, setVisibleStepIds] = useState<string[]>([]);
+
+  const cancelledRef = useRef(false);
+  const timersRef = useRef<number[]>([]);
+
+  const clearTimers = useCallback(() => {
+    timersRef.current.forEach((t) => window.clearTimeout(t));
+    timersRef.current = [];
+  }, []);
+
+  const createChat = useCallback((context?: PageContext) => {
+    const id = newId("chat");
+    const ts = new Date().toISOString();
+    const chat: Chat = {
+      id,
+      title: context ? context.label : "New chat",
+      createdAt: ts,
+      updatedAt: ts,
+      enabledSources: ["commas", "fathom", "zoom"],
+      context,
+      messages: [],
+    };
+    setChats((prev) => [chat, ...prev]);
+    return id;
+  }, []);
+
+  const deleteChat = useCallback(
+    (id: string) => {
+      setChats((prev) => prev.filter((c) => c.id !== id));
+      if (runChatId === id) {
+        clearTimers();
+        setRunChatId(null);
+        setRunPhase("idle");
+        setRunSteps([]);
+        setVisibleStepIds([]);
+      }
+    },
+    [runChatId, clearTimers],
+  );
+
+  const cancelRun = useCallback(() => {
+    cancelledRef.current = true;
+    clearTimers();
+    const chatId = runChatId;
+    setRunPhase("cancelled");
+    if (chatId) {
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chatId
+            ? {
+                ...c,
+                messages: [
+                  ...c.messages,
+                  {
+                    id: newId("m"),
+                    role: "assistant",
+                    text: "Stopped by you.",
+                    ts: new Date().toISOString(),
+                  },
+                ],
+              }
+            : c,
+        ),
+      );
+    }
+    window.setTimeout(() => {
+      setRunChatId(null);
+      setRunPhase("idle");
+      setRunSteps([]);
+      setVisibleStepIds([]);
+    }, 300);
+  }, [runChatId, clearTimers]);
+
+  const sendMessage = useCallback(
+    (chatId: string, text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+
+      const chat = chats.find((c) => c.id === chatId);
+      if (!chat) return;
+
+      const userMessage: ChatMessage = { id: newId("m"), role: "user", text: trimmed, ts: new Date().toISOString() };
+
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chatId
+            ? {
+                ...c,
+                title: c.messages.length === 0 && !c.context ? chatTitleFrom(trimmed) : c.title,
+                messages: [...c.messages, userMessage],
+                updatedAt: new Date().toISOString(),
+              }
+            : c,
+        ),
+      );
+
+      const plan = planMockRun({ prompt: trimmed, enabledSources: chat.enabledSources, context: chat.context });
+
+      cancelledRef.current = false;
+      clearTimers();
+      setRunChatId(chatId);
+      setRunPhase("running");
+      setRunSteps(plan.steps);
+      setVisibleStepIds([]);
+
+      let creditSpend = CREDIT_COST_PER_MESSAGE;
+
+      plan.steps.forEach((s, i) => {
+        const t = window.setTimeout(
+          () => {
+            if (cancelledRef.current) return;
+            setVisibleStepIds((prev) => [...prev, s.id]);
+            creditSpend += CREDIT_COST_PER_STEP;
+          },
+          (i + 1) * STEP_INTERVAL_MS,
+        );
+        timersRef.current.push(t);
+      });
+
+      const finalDelay = (plan.steps.length + 1) * STEP_INTERVAL_MS;
+      const finalTimer = window.setTimeout(() => {
+        if (cancelledRef.current) return;
+        const assistantMessage: ChatMessage = {
+          id: newId("m"),
+          role: "assistant",
+          text: plan.answer,
+          ts: new Date().toISOString(),
+          toolSummary: plan.toolSummary.length > 0 ? plan.toolSummary : undefined,
+        };
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id === chatId
+              ? { ...c, messages: [...c.messages, assistantMessage], updatedAt: new Date().toISOString() }
+              : c,
+          ),
+        );
+        setCredits((prev) => ({ ...prev, balance: Math.max(0, prev.balance - creditSpend) }));
+        setRunPhase("done");
+        window.setTimeout(() => {
+          setRunChatId(null);
+          setRunPhase("idle");
+          setRunSteps([]);
+          setVisibleStepIds([]);
+        }, 250);
+      }, finalDelay);
+      timersRef.current.push(finalTimer);
+    },
+    [chats, clearTimers],
+  );
+
+  const toggleChatSource = useCallback((chatId: string, sourceId: SourceId) => {
+    setChats((prev) =>
+      prev.map((c) =>
+        c.id === chatId
+          ? {
+              ...c,
+              enabledSources: c.enabledSources.includes(sourceId)
+                ? c.enabledSources.filter((s) => s !== sourceId)
+                : [...c.enabledSources, sourceId],
+            }
+          : c,
+      ),
+    );
+  }, []);
+
+  const connectSource = useCallback((sourceId: SourceId) => {
+    setSources((prev) => prev.map((s) => (s.id === sourceId ? { ...s, connection: "connecting" } : s)));
+    window.setTimeout(() => {
+      setSources((prev) => prev.map((s) => (s.id === sourceId ? { ...s, connection: "connected" } : s)));
+    }, 900);
+  }, []);
+
+  const disconnectSource = useCallback((sourceId: SourceId) => {
+    setSources((prev) => prev.map((s) => (s.id === sourceId ? { ...s, connection: "not_connected" } : s)));
+  }, []);
+
+  const resetDemo = useCallback(() => {
+    clearTimers();
+    cancelledRef.current = true;
+    setChats(SEED_CHATS);
+    setSources(SOURCES);
+    setCredits(INITIAL_CREDITS);
+    setRunChatId(null);
+    setRunPhase("idle");
+    setRunSteps([]);
+    setVisibleStepIds([]);
+  }, [clearTimers]);
+
+  const value = useMemo(
+    () => ({
+      chats,
+      sources,
+      credits,
+      runChatId,
+      runPhase,
+      runSteps,
+      visibleStepIds,
+      createChat,
+      deleteChat,
+      sendMessage,
+      cancelRun,
+      toggleChatSource,
+      connectSource,
+      disconnectSource,
+      resetDemo,
+    }),
+    [
+      chats,
+      sources,
+      credits,
+      runChatId,
+      runPhase,
+      runSteps,
+      visibleStepIds,
+      createChat,
+      deleteChat,
+      sendMessage,
+      cancelRun,
+      toggleChatSource,
+      connectSource,
+      disconnectSource,
+      resetDemo,
+    ],
+  );
+
+  return <ChatStoreContext.Provider value={value}>{children}</ChatStoreContext.Provider>;
+}
+
+export function useChatStore() {
+  const ctx = useContext(ChatStoreContext);
+  if (!ctx) throw new Error("useChatStore must be used within a ChatStoreProvider");
+  return ctx;
+}

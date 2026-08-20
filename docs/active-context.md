@@ -1,6 +1,10 @@
 # Commas AI Agent — Active Context
 
-**Last updated:** 2026-08-21 · **Updated by:** Claude (specification session — recon earlier same day)
+**Last updated:** 2026-08-21 · **Updated by:** Claude (UI foundation implementation session)
+
+> **UI foundation is now implemented.** The app runs (`npm run dev`), typechecks, lints, and
+> has a passing test suite. This is chat/agent **UI only** — see "What Remains Mocked" below.
+> No backend, agent loop, or MCP exists yet.
 
 > **Specification set now exists:** `PROTOTYPE_SPEC.md` (product + UX + agent behavior +
 > demo flows), `ARCHITECTURE.md` (system design + event contract + request/response loop),
@@ -187,16 +191,121 @@ APIs, or auth flows were investigated. For this prototype they will be mocked co
 (Context: the Commas CPO floated exactly this connect-external-sources idea for off-platform
 fulfillment — see `../commas-ai-copilot/active-context.md` §5.)
 
+# UI Foundation Pass (2026-08-21)
+
+Implemented per explicit instruction: **UI only** — "Do not implement the real Agent yet. Do
+not implement MCP yet." Everything agent-shaped is a scripted stand-in.
+
+## What was built
+
+- **Left nav Chat entry** (`Sidebar.tsx`) alongside Home and Resolution Center.
+- **New Chat + chat history**, grouped Today/Yesterday/Earlier, with delete
+  (`ChatHistoryList.tsx`).
+- **Standalone chat workspace** (`ChatPage.tsx`, `ChatWorkspace.tsx`, `ChatMessageList.tsx`,
+  `ChatMessageBubble.tsx`) — resumes the last conversation on nav, not always-empty.
+- **Right-side AI panel** (`RightPanel.tsx`) — docks beside page content (not an overlay),
+  shows a page-context chip, has a "switch to full Chat view" control.
+- **Floating AI button** (`FloatingAIButton.tsx`) — opens the panel with the current page's
+  context attached; hidden while the panel is open.
+- **Chat composer** (`ChatComposer.tsx`) — hero variant (empty state) and bar variant
+  (in-conversation), Enter-to-send, Stop button during a run.
+- **Connector/source selector** — per-chat scoping in the composer's controls menu
+  (`SourcesMenu.tsx`) plus a workspace-level "Connected apps" management modal
+  (`ConnectedAppsModal.tsx`) with simulated connect/disconnect.
+- **AI credit indicator** (`CreditIndicator.tsx`) — balance pill in both the Chat page header
+  and the right-panel header, flashes on change, exhausted state + demo reset.
+- **Empty state** (`EmptyState.tsx`) — Claude-Desktop-inspired greeting + centered composer +
+  dismissible "connect your apps" strip.
+- **Suggested capabilities** (`SuggestedCapabilities.tsx`) — global set + dispute-specific set
+  swapped in automatically when the chat has dispute context.
+- **Simulated agent progress** (`ProgressBlock.tsx`, `ToolSummary.tsx`) — sequential
+  "Checking transaction history…" style lines with source icons, collapsing into "Checked N
+  sources" after the answer — previews the real event contract in ARCHITECTURE.md §9 without
+  implementing it.
+- Both required contexts work: **standalone chat** (`/` → Chat nav) and **contextual AI**
+  opened from another page (Resolution Center's "Investigate with AI" → right panel with a
+  `Dispute #2481` context chip and dispute-specific suggestions).
+- Minimal `DashboardPage.tsx` and `ResolutionCenterPage.tsx` placeholders — just enough
+  Commas-native surface to host and prove the contextual-AI entry points; not full pages.
+
+## Files / components created
+
+```
+package.json, vite.config.ts, tsconfig*.json, index.html, eslint.config.js  (scaffold)
+src/index.css                                                              (ported design tokens + new agent/chat utilities)
+src/main.tsx, src/App.tsx                                                  (routing/state wiring)
+src/lib/types.ts, mockData.ts, mockEngine.ts, liteMarkdown.tsx             (mock domain + scripted engine)
+src/hooks/useChatStore.tsx                                                 (shared chat/sources/credits state + run playback)
+src/components/shell/CommaMark.tsx, AgentMark.tsx, Sidebar.tsx, TopNav.tsx, Badge.tsx
+src/components/chat/SourceIcon.tsx, CreditIndicator.tsx, ContextChip.tsx, ProgressBlock.tsx,
+  ToolSummary.tsx, ChatMessageBubble.tsx, ChatMessageList.tsx, SourcesMenu.tsx,
+  ConnectedAppsModal.tsx, ChatComposer.tsx, SuggestedCapabilities.tsx, EmptyState.tsx,
+  ChatWorkspace.tsx, ChatHistoryList.tsx, RightPanel.tsx, FloatingAIButton.tsx
+src/pages/DashboardPage.tsx, ResolutionCenterPage.tsx, ChatPage.tsx
+tests/setup.ts, mockEngine.test.ts, Sidebar.test.tsx, ChatFlow.test.tsx
+```
+
+Reused from `../commas-ai-copilot` (ported, not imported cross-repo, per Confirmed Technical
+Decisions): the `index.css` design tokens, `CommaMark`, `Sidebar`/`TopNav` structure, `Badge`.
+
+**Directory structure note:** the original scaffold's `src/chat/` and `src/ui/` placeholder
+folders were removed — real UI code lives in conventional `src/components/`, `src/pages/`,
+`src/hooks/`, `src/lib/` instead, which is clearer for a frontend-only pass. The other
+scaffold placeholders (`src/agent/`, `src/llm/`, `src/mcp/`, `src/connectors/`,
+`src/context/`) are left as-is for the future backend (Phases 2–3) — don't recreate
+`src/chat/` or `src/ui/` without updating this note.
+
+## What remains mocked (do not mistake for real)
+
+- **`src/lib/mockEngine.ts`** is the entire "agent" — a `planMockRun()` function that
+  keyword-matches the prompt (word-boundary regex, fixed after a test caught "hi" matching
+  inside "this"/"which") against ~6 canned scenarios and returns a fixed step list + answer.
+  No LLM call, no reasoning, no real tool execution.
+- **`src/hooks/useChatStore.tsx`** plays that plan back with `setTimeout`s to simulate
+  streaming/progress — this stands in for the SSE event stream in ARCHITECTURE.md §9, but
+  is 100% client-side with no backend.
+- **All five sources' data** (Commas, Fathom, Zoom, Google Meet, ClickFunnels) is hard-coded
+  in `mockData.ts` / inline in `mockEngine.ts` — same Sarah Johnson / Dispute #2481 scenario
+  as the old prototype, extended, not yet reconciled line-by-line with it.
+- **Connect/disconnect** in `ConnectedAppsModal` is a fake 900ms delay, no OAuth.
+- **Credits** deduct via a hardcoded formula in the store (1/message + 1/step) — matches
+  ARCHITECTURE.md §14's read-cost numbers but has no write-cost path since no write tool
+  exists yet.
+- **No write actions or approval cards exist.** The mock engine only performs reads; spec
+  §4.5–4.6 (write approval) is entirely unbuilt.
+- **Persistence is in-memory only** (React Context) — refreshing the page resets everything
+  to the seed data.
+
+## Known issues
+
+- No responsive/mobile layout — `Sidebar` hides below 900px, `RightPanel` hides below 1024px
+  (Tailwind `lg:`), matching the reference screenshots' desktop-only scope but not tested or
+  designed for narrower viewports.
+- `resetDemo()` restores seed data wholesale, discarding any chats created during the demo
+  session — intentional for a demo reset control, but worth knowing before relying on it
+  mid-demo.
+- `npm install` reported 5 dev-dependency vulnerabilities (3 moderate, 1 high, 1 critical) —
+  not investigated or fixed this session; none are in the production bundle (build output is
+  188KB JS / 27KB CSS, no dev tooling shipped), but should be triaged before this repo is
+  made public or a remote is added.
+- No committed Playwright e2e suite yet — visual verification this session used an ad-hoc
+  script (`node` + `playwright`) run from job scratch space, not saved into the repo.
+- `ChatHistoryList` delete affordance is hover-only (no touch-friendly alternative) —
+  acceptable for a desktop-only prototype pass, flagged for later.
+
 # Current Repository State
 
-- Scaffolding only: `docs/`, `src/{agent,llm,mcp,connectors,context,chat,ui}/` (placeholder
-  READMEs, no code), `tests/`, `public/`, minimal `package.json` (no deps), `.gitignore`.
-- `docs/references/` — 10 UX reference screenshots (Notion AI ×4, Notion MCP ×2, Commas
-  dashboard/integrations/Resolution Center, Claude Desktop).
-- **Specification set (written, committed):** `docs/PROTOTYPE_SPEC.md`,
-  `docs/ARCHITECTURE.md`, `docs/IMPLEMENTATION_PLAN.md` (renamed from the earlier lowercase
-  stubs — note macOS is case-insensitive, so never create a second file differing only in
-  case).
+- `docs/` — full spec set (`PROTOTYPE_SPEC.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,
+  this file) + `docs/references/` (10 UX screenshots).
+- **A real, running Vite + React 18 + TypeScript + Tailwind v4 app** implementing the chat/
+  agent UI foundation (see "UI Foundation Pass" below for the full file list). No backend —
+  everything is client-side React state + a scripted mock engine standing in for the real
+  agent loop.
+- `tests/` — Vitest unit/integration tests (10 passing): `mockEngine.test.ts`,
+  `Sidebar.test.tsx`, `ChatFlow.test.tsx`, `setup.ts`. No Playwright e2e suite committed yet
+  (IMPLEMENTATION_PLAN.md Phase 4's acceptance criteria calls for one — see Not Implemented).
+- `package.json` now has real dependencies (React, Vite, Tailwind v4, lucide-react, Vitest,
+  Testing Library, ESLint) and working `dev`/`build`/`typecheck`/`lint`/`test` scripts.
 - Git: local repo on `main`, **no remote**.
 
 # Completed
@@ -204,21 +313,35 @@ fulfillment — see `../commas-ai-copilot/active-context.md` §5.)
 - Repo scaffold + reference screenshots (committed).
 - Technical reconnaissance of commasdocs.com, the old prototype, and this repo (verified by
   direct fetch/inspection on 2026-08-21; findings recorded in this file).
-- Full specification set: `PROTOTYPE_SPEC.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`
-  (written against the recon; committed).
-
-No application code exists.
+- Full specification set: `PROTOTYPE_SPEC.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`.
+- **UI foundation implementation** (2026-08-21) — see the dedicated section below. Verified:
+  `npm run typecheck`, `npm run lint`, `npm test` (10/10), and `npm run build` all pass;
+  the app was run in a real headless-Chromium browser and visually inspected across all
+  required surfaces with zero console errors.
 
 # In Progress
 
-- Nothing. **Next up: `IMPLEMENTATION_PLAN.md` Phase 0 (workspace scaffold)** — blocked only
-  on the sign-off items in Open Questions 1–2 (or explicit user go-ahead, which implies
-  accepting the recorded defaults).
+- Nothing. **Next up:** replace the mock engine with the real backend + agent loop + MCP
+  client (`IMPLEMENTATION_PLAN.md` Phases 2–3), and/or the full Resolution Center port
+  (Phase 1) — see "Next Step" below for the recommended order.
 
 # Not Implemented
 
-Everything: frontend, backend, agent loop, MCP client, mock MCP servers, chat UX, credits,
-Resolution Center flow, tests, deployment.
+- **Backend, agent loop, LLM calls, MCP client, mock or real MCP servers.** Everything
+  agent-shaped in the UI is driven by `src/lib/mockEngine.ts`, a pattern-matched script — see
+  "What Remains Mocked."
+- **Full Resolution Center** (list/filters/evidence-copilot port from `commas-ai-copilot`) —
+  `ResolutionCenterPage.tsx` is a deliberately minimal placeholder (one dispute card), not
+  the full page. IMPLEMENTATION_PLAN.md Phase 1.
+- **Write-action / approval-card flow** (spec §4.5–4.6) — the mock engine only performs
+  reads; no write tool, no approval card UI exists yet.
+- **Persistence** — chat/credits/sources state lives only in React context; a page reload
+  loses everything (ARCHITECTURE.md §10's JSON-snapshot store isn't built).
+- **Playwright e2e suite** committed to the repo (Phase 4's acceptance criteria). This
+  session's visual verification used an ad-hoc Playwright script run from scratch space, not
+  a committed test.
+- Real LLM/MCP "real mode," authentication, deployment — unchanged from before, still Phase
+  3+/deferred.
 
 # Confirmed Technical Decisions
 
@@ -235,7 +358,10 @@ Resolution Center flow, tests, deployment.
 Decisions adopted into the specification set (2026-08-21; defaults chosen by Claude where
 the user hadn't answered — flagged in Open Questions where an override is still possible):
 
-- **Frontend:** React 18 + Vite + Tailwind v4 + `lucide-react` (visual reuse from old repo).
+- **Frontend:** React 18 + Vite + Tailwind v4 + `lucide-react` (visual reuse from old repo) —
+  **implemented and running**, not just decided. State management is React Context
+  (`ChatStoreProvider`), no external state library — sufficient for the UI-only pass; revisit
+  if backend integration (Phase 3) makes the context provider awkward.
 - **Backend:** Node 20+ / TypeScript / **Hono**, REST + SSE, single process.
 - **LLM:** `@anthropic-ai/sdk`, model `claude-opus-5`, adaptive thinking, SDK beta
   tool-runner loop (manual loop as documented fallback), streaming; **real LLM calls**
@@ -298,15 +424,27 @@ stub-LLM testing strategy, credits pricing, `commas_*` namespacing for mock disp
 
 # Next Steps
 
-The build order now lives in `IMPLEMENTATION_PLAN.md` (Phases 0–6, each independently
-testable with acceptance criteria). **Next implementation phase: Phase 0 — workspace
-scaffold** (Vite+React+Tailwind frontend, Hono backend with SSE proof, shared types,
-dev/test tooling). Then Phases 1 (shell port) and 2 (mock data + MCP servers) — which may
-run in parallel — then 3 (agent runtime) → 4 (chat UX) → 5 (ambient surfaces + flagship) →
-6 (demo hardening).
+The build order lives in `IMPLEMENTATION_PLAN.md` (Phases 0–6). This session delivered the
+frontend half of Phase 0 plus most of Phase 4's UI surface **ahead of schedule and with mocks
+in place of Phases 2–3**, per this session's explicit "UI only, no agent, no MCP yet"
+instruction. Concretely still open from the plan:
 
-Before starting Phase 3's live smoke test, obtain `ANTHROPIC_API_KEY` from the user (Open
-Question 1). Nothing else blocks Phase 0.
+1. **Phase 0 (remainder):** no backend exists yet — no Hono server, no SSE, no shared types
+   package with a server side to share with.
+2. **Phase 1 (remainder):** `ResolutionCenterPage.tsx` is a placeholder, not the full port
+   (list, filters, evidence copilot) from `commas-ai-copilot`.
+3. **Phase 2:** no mock MCP servers exist — `mockEngine.ts` fakes their effect without the
+   MCP protocol, tool registry, or five actual servers described in ARCHITECTURE.md §7–8.
+4. **Phase 3:** no agent runtime, no LLM calls, no real event stream — `useChatStore.tsx`'s
+   `setTimeout` playback stands in for all of it.
+5. **Phase 4 (remainder):** no write/approval-card flow; no committed Playwright e2e suite.
+
+**Recommended next step:** build Phase 2 (mock MCP servers + tool registry) and Phase 3
+(agent runtime, wired to the *same* `useChatStore` UI surface built this session) so the real
+architecture replaces the mock engine without a UI rewrite — the components were built
+against the `Chat`/`ProgressStep`/`ToolSummaryItem` shapes in `src/lib/types.ts`, which
+already mirror ARCHITECTURE.md's real types. Obtain `ANTHROPIC_API_KEY` from the user before
+Phase 3's live smoke test (Open Question 1 — still unresolved).
 
 # Session Handoff
 

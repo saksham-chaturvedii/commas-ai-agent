@@ -2,6 +2,10 @@ node_modules/
 dist/
 dist-ssr/
 *.local
+.env
+.env.*
+!.env.example
+data/state.json
 
 # editor / OS
 .DS_Store
@@ -10,3 +14,9 @@ dist-ssr/
 
 # build artifacts
 tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# test artifacts
+test-results/
+playwright-report/
+coverage/

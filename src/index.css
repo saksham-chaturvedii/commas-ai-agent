@@ -1,0 +1,269 @@
+@import "tailwindcss";
+
+@theme {
+  --font-body: "Inter", "Geist", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-heading: "Geist", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+
+  /* text colors — ported from commas-ai-copilot for visual consistency */
+  --color-text-primary: #1a1a1a;
+  --color-text-label: #404040;
+  --color-text-quaternary: #727272;
+  --color-text-overline: rgba(0, 0, 0, 0.4);
+  --color-text-org: #111111;
+
+  /* neutrals */
+  --color-border-control: #d1d5db;
+  --color-border-pill: rgba(0, 0, 0, 0.1);
+  --color-border-card: rgba(0, 0, 0, 0.06);
+  --color-border-popover: #e5e5e5;
+  --color-row-divider: #ebebeb;
+  --color-table-header: #fafafa;
+  --color-app-bg: #f5f6f8;
+
+  /* brand */
+  --color-primary: #2e78ef;
+
+  /* semantic */
+  --color-danger-bg: #fdecee;
+  --color-danger-text: #d5384b;
+  --color-success-bg: #edfcde;
+  --color-success-border: #b5ef72;
+  --color-success-text: #366f08;
+  --color-success-check-bg: #e4f5d6;
+  --color-success-check-text: #4e9b11;
+  --color-warning-bg: #ffefdf;
+  --color-warning-border: #f6ba94;
+  --color-warning-text: #cb6301;
+  --color-info-bg: #edf3ff;
+  --color-info-border: #aed3fa;
+  --color-info-text: #4f7fcd;
+
+  /* agent-specific accent (distinguishes AI surfaces from the rest of Commas) */
+  --color-agent-accent: #7c5cff;
+  --color-agent-accent-bg: #f4f1ff;
+  --color-agent-accent-border: #ded4ff;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  color: var(--color-text-primary);
+  background: var(--color-app-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- shared recipe utilities (ported from commas-ai-copilot DESIGN.md) ---- */
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 12px;
+  box-shadow:
+    0 0 0 1px rgba(16, 24, 40, 0.035),
+    0 8px 30px -14px rgba(16, 24, 40, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.main-surface {
+  background: rgba(255, 255, 255, 0.98);
+  border-radius: 12px;
+  box-shadow:
+    0 0 0 1px rgba(16, 24, 40, 0.05),
+    0 2px 10px rgba(26, 31, 50, 0.08),
+    0 16px 40px -18px rgba(26, 31, 50, 0.16);
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 40px;
+  padding: 0 16px;
+  background: #ffffff;
+  border: 1px solid var(--color-border-control);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  color: var(--color-text-primary);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btn-secondary:hover {
+  background: #fafafa;
+}
+
+.btn-dark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 37px;
+  padding: 0 16px;
+  background: linear-gradient(180deg, #343434, #0c0c0c);
+  border: none;
+  border-radius: 12px;
+  box-shadow:
+    inset 1px 1px 1px rgba(255, 255, 255, 0.18),
+    inset -1px -1px 1px rgba(0, 0, 0, 0.6),
+    0 1px 2px rgba(0, 0, 0, 0.25);
+  color: #ffffff;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btn-dark:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-blue {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 40px;
+  padding: 10px 14px;
+  background: linear-gradient(180deg, #88c0fd, #2e78ef);
+  border: none;
+  border-radius: 12px;
+  box-shadow:
+    inset 1px 1px 1px rgba(255, 255, 255, 0.5),
+    inset -1px -1px 1px rgba(28, 72, 143, 0.5),
+    0 1px 2px rgba(0, 0, 0, 0.05);
+  color: #ffffff;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.checkbox-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px var(--color-border-control);
+  background: #ffffff;
+  flex-shrink: 0;
+}
+
+.checkbox-box[data-checked="true"] {
+  background: #111111;
+  box-shadow: none;
+}
+
+.content-card {
+  background: #ffffff;
+  border: 1px solid var(--color-border-card);
+  border-radius: 15px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.popover-card {
+  position: absolute;
+  z-index: 40;
+  background: #ffffff;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px var(--color-border-popover),
+    0 10px 15px -3px rgba(0, 0, 0, 0.1),
+    0 4px 6px -4px rgba(0, 0, 0, 0.1);
+}
+
+/* ---- chat-specific utilities ---- */
+
+.chat-bubble-user {
+  background: #f0f2f5;
+  border-radius: 16px 16px 4px 16px;
+  padding: 10px 14px;
+  color: var(--color-text-primary);
+  font-size: 14px;
+  line-height: 21px;
+}
+
+.chat-bubble-agent {
+  color: var(--color-text-primary);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.composer-shell {
+  background: #ffffff;
+  border: 1px solid var(--color-border-control);
+  border-radius: 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.composer-shell:focus-within {
+  border-color: var(--color-agent-accent);
+  box-shadow: 0 0 0 3px var(--color-agent-accent-border);
+}
+
+.suggestion-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--color-border-card);
+  border-radius: 10px;
+  background: #ffffff;
+  color: var(--color-text-label);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+
+.suggestion-chip:hover {
+  border-color: var(--color-agent-accent-border);
+  background: var(--color-agent-accent-bg);
+  color: var(--color-text-primary);
+}
+
+@keyframes progress-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.progress-dot {
+  animation: progress-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes credits-flash {
+  0% {
+    background-color: var(--color-agent-accent-bg);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.credits-flash {
+  animation: credits-flash 0.9s ease-out;
+}
