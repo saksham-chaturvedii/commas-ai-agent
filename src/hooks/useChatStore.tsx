@@ -10,14 +10,15 @@ import type {
   SourceInfo,
 } from "../lib/types";
 import { DEFAULT_ENABLED_SOURCES, INITIAL_CREDITS, SEED_CHATS, SOURCES } from "../lib/mockData";
-import { planMockRun } from "../lib/mockEngine";
+import { runAgentTurn, type AgentRunPlan } from "../lib/agentApi";
 
 /**
- * Shared chat state for the UI foundation pass. This is a frontend-only stand-in for
- * docs/ARCHITECTURE.md §10's backend ChatStore + §4's agent runtime + §9's SSE event stream —
- * everything here is client-side React state (no persistence beyond the page session), and
- * `planMockRun` (src/lib/mockEngine.ts) stands in for the real agent loop. See
- * docs/active-context.md "What remains mocked" for the full list.
+ * Shared chat state. Chat/sources/credits state is still client-side React state only (no
+ * persistence beyond the page session — docs/ARCHITECTURE.md §10's backend ChatStore isn't
+ * built), but `sendMessage` now calls the real agent backend (server/index.ts) over
+ * POST /api/agent/run instead of a local scripted engine — see docs/active-context.md for
+ * what's real vs. still mocked. The client-side setTimeout playback below only paces the
+ * *display* of steps the backend already executed; it does not simulate them.
  */
 
 const STEP_INTERVAL_MS = 650;
@@ -64,6 +65,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
 
   const cancelledRef = useRef(false);
   const timersRef = useRef<number[]>([]);
+  const abortRef = useRef<AbortController | null>(null);
 
   const clearTimers = useCallback(() => {
     timersRef.current.forEach((t) => window.clearTimeout(t));
@@ -118,6 +120,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   const cancelRun = useCallback(() => {
     cancelledRef.current = true;
     clearTimers();
+    abortRef.current?.abort();
     const chatId = runChatId;
     setRunPhase("cancelled");
     if (chatId) {
@@ -171,56 +174,85 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
         ),
       );
 
-      const plan = planMockRun({ prompt: trimmed, enabledSources: chat.enabledSources, context: chat.context });
-
       cancelledRef.current = false;
       clearTimers();
+      const controller = new AbortController();
+      abortRef.current = controller;
       setRunChatId(chatId);
       setRunPhase("running");
-      setRunSteps(plan.steps);
+      setRunSteps([]);
       setVisibleStepIds([]);
 
-      let creditSpend = CREDIT_COST_PER_MESSAGE;
-
-      plan.steps.forEach((s, i) => {
-        const t = window.setTimeout(
-          () => {
-            if (cancelledRef.current) return;
-            setVisibleStepIds((prev) => [...prev, s.id]);
-            creditSpend += CREDIT_COST_PER_STEP;
-          },
-          (i + 1) * STEP_INTERVAL_MS,
-        );
-        timersRef.current.push(t);
-      });
-
-      const finalDelay = (plan.steps.length + 1) * STEP_INTERVAL_MS;
-      const finalTimer = window.setTimeout(() => {
+      // Real network call to the agent backend (server/index.ts) — the ProgressBlock's
+      // "Thinking…" fallback (runSteps still empty) covers this in-flight window; once the
+      // response arrives, the same per-step reveal timers as before pace its *display* only —
+      // the steps themselves already ran server-side.
+      void (async () => {
+        let plan: AgentRunPlan;
+        try {
+          plan = await runAgentTurn(
+            { prompt: trimmed, enabledSources: chat.enabledSources, context: chat.context },
+            controller.signal,
+          );
+        } catch {
+          if (cancelledRef.current) return;
+          plan = {
+            steps: [],
+            answer: "",
+            toolSummary: [],
+            error: {
+              code: "server_unavailable",
+              message: "Couldn't reach the agent — check that the backend is running (npm run dev:server).",
+            },
+          };
+        }
         if (cancelledRef.current) return;
-        const assistantMessage: ChatMessage = {
-          id: newId("m"),
-          role: "assistant",
-          text: plan.answer,
-          ts: new Date().toISOString(),
-          toolSummary: plan.toolSummary.length > 0 ? plan.toolSummary : undefined,
-        };
-        setChats((prev) =>
-          prev.map((c) =>
-            c.id === chatId
-              ? { ...c, messages: [...c.messages, assistantMessage], updatedAt: new Date().toISOString() }
-              : c,
-          ),
-        );
-        setCredits((prev) => ({ ...prev, balance: Math.max(0, prev.balance - creditSpend) }));
-        setRunPhase("done");
-        window.setTimeout(() => {
-          setRunChatId(null);
-          setRunPhase("idle");
-          setRunSteps([]);
-          setVisibleStepIds([]);
-        }, 250);
-      }, finalDelay);
-      timersRef.current.push(finalTimer);
+
+        const answerText = plan.error ? `I ran into a problem: ${plan.error.message}` : plan.answer;
+        setRunSteps(plan.steps);
+
+        let creditSpend = CREDIT_COST_PER_MESSAGE;
+
+        plan.steps.forEach((s, i) => {
+          const t = window.setTimeout(
+            () => {
+              if (cancelledRef.current) return;
+              setVisibleStepIds((prev) => [...prev, s.id]);
+              creditSpend += CREDIT_COST_PER_STEP;
+            },
+            (i + 1) * STEP_INTERVAL_MS,
+          );
+          timersRef.current.push(t);
+        });
+
+        const finalDelay = (plan.steps.length + 1) * STEP_INTERVAL_MS;
+        const finalTimer = window.setTimeout(() => {
+          if (cancelledRef.current) return;
+          const assistantMessage: ChatMessage = {
+            id: newId("m"),
+            role: "assistant",
+            text: answerText,
+            ts: new Date().toISOString(),
+            toolSummary: plan.toolSummary.length > 0 ? plan.toolSummary : undefined,
+          };
+          setChats((prev) =>
+            prev.map((c) =>
+              c.id === chatId
+                ? { ...c, messages: [...c.messages, assistantMessage], updatedAt: new Date().toISOString() }
+                : c,
+            ),
+          );
+          setCredits((prev) => ({ ...prev, balance: Math.max(0, prev.balance - creditSpend) }));
+          setRunPhase("done");
+          window.setTimeout(() => {
+            setRunChatId(null);
+            setRunPhase("idle");
+            setRunSteps([]);
+            setVisibleStepIds([]);
+          }, 250);
+        }, finalDelay);
+        timersRef.current.push(finalTimer);
+      })();
     },
     [chats, clearTimers],
   );

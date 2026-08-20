@@ -1,13 +1,16 @@
 # Commas AI Agent — Active Context
 
-**Last updated:** 2026-08-21 · **Updated by:** Claude (Commas-foundation UI migration session)
+**Last updated:** 2026-08-21 · **Updated by:** Claude (Commas tool layer / real agent backend session)
 
-> **The UI is now built ON the commas-ai-copilot visual foundation** (see "Commas Foundation
-> Migration" below) — full ported shell, real Resolution Center + Dispute Detail, and the
-> agent panel as the evolution of the old inline copilot. Sources corrected to the CPO's
-> connector list (Google Calendar, Zoom, Fathom, Gmail, CRM). The app runs, typechecks,
-> lints, builds, and has a passing test suite (16 tests). Still chat/agent **UI only** — no
-> backend, agent loop, or MCP exists yet.
+> **A real agent backend now exists.** User → Agent → LLM → MCP client → Commas MCP server →
+> tool result → LLM → final answer is implemented and tested end-to-end (see "Commas Tool
+> Layer" below) — not just designed. The chat UI calls it over `POST /api/agent/run`. The
+> MCP connection defaults to an in-process **mock** Commas MCP server (real MCP protocol,
+> mock data) because no Commas credentials are available in this environment; the LLM
+> defaults to a **deterministic stub** because no `ANTHROPIC_API_KEY` is available — both are
+> swappable for the real thing via env vars with no code changes. 36/36 tests pass, and the
+> full loop was verified live in a browser against the real backend (4/4 scenarios, 0 console
+> errors, 0 secrets in the client bundle).
 
 > **Specification set now exists:** `PROTOTYPE_SPEC.md` (product + UX + agent behavior +
 > demo flows), `ARCHITECTURE.md` (system design + event contract + request/response loop),
@@ -453,19 +456,185 @@ connect), no write/approval flow, no persistence, no committed e2e suite. The ol
 deliberately NOT ported — the agent panel supersedes the copilot cards, and source-record
 inspection is a candidate for a later pass if evidence traceability returns as a requirement.
 
+# Commas Tool Layer (2026-08-21, after the UI migration pass)
+
+Prior sessions built UI only, with everything agent-shaped scripted client-side
+(`src/lib/mockEngine.ts`). That premise was checked at the start of this session — confirmed
+by inspecting the repo directly (`src/agent/`, `src/llm/`, `src/mcp/` were empty placeholder
+READMEs, no backend, no `@anthropic-ai/sdk`/`@modelcontextprotocol/sdk` deps) — and found not
+to match the task's framing that "the agent orchestration layer is complete." This session
+builds it for real, deleting the client-side mock engine it replaces.
+
+## Architecture actually implemented
+
+```
+Browser (React) → POST /api/agent/run → Hono backend (server/)
+                                          Agent (server/agent/runtime.ts)
+                                            → LlmClient.nextStep()  [server/llm/]
+                                            → CommasMcpClient.callTool()  [server/mcp/client.ts]
+                                              → real MCP protocol (JSON-RPC)
+                                              → mock Commas MCP server  [server/mcp/mockCommasServer.ts]
+                                            → result fed back to LlmClient
+                                            → loop until final answer
+```
+
+The Agent never touches Commas endpoints directly — it only calls `CommasMcpClient`, which
+only speaks MCP. `server/llm/` and `server/mcp/` are both swappable behind their interfaces
+(`LlmClient`, the MCP client's mock/real factory methods) with zero changes to
+`server/agent/runtime.ts`.
+
+## Commas MCP inspection (grounded in docs/active-context.md's earlier commasdocs.com recon)
+
+- **Authentication:** `x-api-key` header, seller API key from the dashboard. No OAuth for the
+  public API or documented MCP server.
+- **Real MCP server exists**, Streamable HTTP, at the Railway URL already recorded in this
+  file's Integrations section — not the branded domain, not guaranteed stable.
+- **Read tools (11 documented):** this pass implements 3 of them (`fanbasis_list_customers`,
+  `fanbasis_list_transactions`, `fanbasis_get_transaction`) — the minimum needed for
+  customers + transactions/orders per the task's scope, not the full 11.
+- **Disputes: confirmed no real tool exists.** `commas_get_dispute` is prototype-only
+  (namespaced `commas_`, not `fanbasis_`, exactly per the earlier-recorded convention) —
+  mock data only, matching the documented `dispute.created` webhook shape.
+- **Write capabilities:** documented as real (charge, refund, discount CRUD, subscription
+  changes) but **not implemented here** — this repo has no approval-card UI yet
+  (PROTOTYPE_SPEC.md §4.6), so shipping a write tool with no confirmation gate would be
+  unsafe. Deferred, not faked.
+- **Local development option:** commasdocs.com documents a QA sandbox
+  (`qa.dev-fan-basis.com`) as the real platform's local-dev path. No sandbox key is
+  available here, so the actual local-dev implementation is the in-process mock MCP server
+  instead — architecturally equivalent (same protocol, same tool contracts), just without
+  real data behind it.
+
+## What was built
+
+- **`server/mcp/mockCommasServer.ts`** — a real `McpServer` (from
+  `@modelcontextprotocol/sdk`) exposing the 4 tools above over mock data matching
+  `src/lib/disputeData.ts`'s story (Sarah Johnson, txn_8b3f2a1c9d, $499, Dispute #2481).
+- **`server/mcp/client.ts`** — `CommasMcpClient`: `connectMock()` (in-process
+  `InMemoryTransport` linked pair — real MCP protocol, no secrets) and `connectReal(url,
+  apiKey)` (Streamable HTTP + `x-api-key` header — wired, live-tested only against an
+  unreachable address to prove the failure path, never against a real Commas account).
+- **`server/agent/registry.ts`** — tool discovery: the registry is built from the MCP
+  server's `tools/list` response, not a hardcoded name list. Unrecognized tools default to
+  `write` classification (fail-safe). `GET /api/tools` exposes it.
+- **`server/agent/errors.ts`** — `classifyError()` maps any caught error to one of
+  `auth_failed | server_unavailable | malformed_result | tool_error | timeout | unknown`;
+  `empty_result` is handled as a normal (non-error) outcome by the LLM layer instead (an
+  empty customer search isn't a failure — see stubClient.ts's `finalize()`).
+- **`server/agent/runtime.ts`** — the loop: filters tools by `enabledSources`, calls
+  `llmClient.nextStep()`, dispatches tool calls through `mcpClient.callTool()` with a
+  10s timeout, feeds results back, loops (cap 6), returns `{steps, answer, toolSummary,
+  error?}`. Tool-level failures are recoverable (fed back to the LLM, which explains what it
+  couldn't do); LLM-level failures (auth, connectivity) populate the top-level `error` field.
+- **`server/llm/`** — `LlmClient` interface; `StubLlmClient` (deterministic, routes real
+  prompts to real tool calls by keyword/pattern — this is what ran in all testing, since no
+  `ANTHROPIC_API_KEY` exists in this environment); `AnthropicLlmClient` (real
+  `@anthropic-ai/sdk` usage, `claude-opus-5`, adaptive thinking, proper tool-use loop —
+  written but **never actually invoked** this session, no key available to test it live).
+- **`server/app.ts` / `server/index.ts`** — Hono app (`GET /api/health`, `GET /api/tools`,
+  `POST /api/agent/run`) split from the entry point specifically so tests can drive it via
+  Hono's in-memory `app.request()` with no port binding.
+- **`src/lib/agentApi.ts` + `useChatStore.tsx` (minimal frontend wiring)** — `sendMessage`
+  now calls `POST /api/agent/run` instead of the deleted `planMockRun()`. The existing
+  per-step reveal timers, `ProgressBlock`'s "Thinking…" fallback, `ToolSummary`, credits, and
+  cancellation (now aborts the in-flight fetch too) are all **unchanged** — only where the
+  plan data comes from changed. On error, the assistant message becomes `"I ran into a
+  problem: {message}"` — no new UI components.
+- **Deleted:** `src/lib/mockEngine.ts` and `tests/mockEngine.test.ts` (superseded, would
+  otherwise be dead/confusing code sitting next to the real thing).
+
+## Security
+
+- `ANTHROPIC_API_KEY` / `COMMAS_API_KEY` are read via `process.env` only inside `server/`
+  (Node), which the frontend build never touches. Verified directly: `grep`'d the production
+  `dist/assets/*.js` bundle for API key env var names and the server-only SDK package names
+  — none present.
+- `.env` is gitignored (already was); `.env.example` documents the shape with empty values.
+  No real key was ever entered anywhere.
+- The real-mode MCP path requires two explicit signals (`COMMAS_MCP_MODE=real` +
+  both `COMMAS_MCP_URL` and `COMMAS_API_KEY` set) and was only exercised in tests against an
+  intentionally-unreachable address — never against a live Commas account.
+
+## Verification
+
+- `npm run typecheck` (3 tsconfig projects: app, node, **server** — new), `npm run lint`,
+  `npm run build` all pass clean.
+- **36/36 tests pass** (was 16; net +20, minus the 6 deleted mockEngine tests = the new
+  backend suite is ~26 tests): `tests/server/{errors,registry,mcpClient,runtime,app}.test.ts`
+  + updated `tests/ChatFlow.test.tsx` (now mocks `fetch` at the network boundary and covers
+  both the success path and both frontend error paths — backend-reported error and
+  network-unreachable).
+- **The 5 requested validation scenarios**, all passing against real code (mock LLM, real
+  everything else): user query needing Commas data → successful tool call → result passed
+  back to the agent → final answer (`tests/server/runtime.test.ts`, scenario 1); tool failure
+  produces a clean, non-crashing response (`runtime.test.ts` + `app.test.ts`, scenario 2 —
+  additionally verified **live in a browser** against the real running backend, see below).
+  Also covered beyond the minimum: empty result, disabled source, MCP-connection-unavailable,
+  malformed request body, unreachable real-mode MCP server (genuine `ECONNREFUSED` against
+  `127.0.0.1:1`).
+- **Live end-to-end browser verification** (both servers actually running, Playwright
+  driving real network calls, not mocks): "Look up customer sarah.johnson@email.com" →
+  correct answer; "Look up transaction txn_8b3f2a1c9d" → correct answer; "Look up transaction
+  txn_doesnotexist" → clean "I couldn't complete that — Transaction not found:
+  txn_doesnotexist." (the failure case, rendered exactly like a normal message, no crash, no
+  raw error); "help me resolve this dispute" → correct dispute lookup using page context.
+  4/4 network calls returned 200, 0 console errors, credits decremented correctly each turn.
+  Screenshots retained in job scratch space.
+
+## What's still not real (be precise about this)
+
+- **No live LLM call was ever made.** `AnthropicLlmClient` is real, complete code, but this
+  environment has no `ANTHROPIC_API_KEY`, so every test and every live-browser check above
+  ran on `StubLlmClient`. The "reasoning" is scripted; the tool-call/MCP/error-handling
+  machinery around it is not. Anyone continuing this: get a key, set it in `.env`, restart
+  `npm run dev:server`, and the exact same UI/tests should work against the real model —
+  nothing else should need to change. Confirm `llmMode` in `GET /api/health` flips to
+  `"anthropic"`.
+- **No real Commas MCP connection was ever made.** `connectReal()` is real code, tested only
+  against a deliberately-unreachable address. No Commas API key exists here.
+- **No write tools.** Documented as available on the real platform; deliberately not
+  implemented because there's no approval-card UI to gate them yet.
+- **7 of the 11 documented Commas read tools aren't implemented** (only customers,
+  list-transactions, get-transaction). `fanbasis_list_discount_codes`,
+  `fanbasis_get_checkout_session`, `fanbasis_get_payment_methods`, etc. would follow the
+  exact same pattern in `mockCommasServer.ts` + `registry.ts`'s `KNOWN_TOOLS` map if needed.
+- **Only the "Look up a customer" / "Analyze my disputes" / transaction-id-shaped prompts
+  route to real tools.** The stub's other suggestion-chip prompts ("Summarize my sales" →
+  now hits `fanbasis_list_transactions`, fine; "Find information across my connected apps",
+  "Help me respond to a customer" beyond a customer name) either fall through to the
+  honest fallback text or a partial match — this session did not attempt to replicate every
+  scenario the old client-side `mockEngine.ts` covered (revenue-drop analysis, non-Commas
+  external sources like Zoom/Fathom/Gmail/CRM) because those aren't backed by any real Commas
+  tool. Non-Commas sources (Google Calendar, Zoom, Fathom, Gmail, CRM) remain entirely UI/
+  sources-menu mocks with no backend behind them at all — out of scope for "the Commas tool
+  layer."
+- **Persistence unchanged:** still in-memory only; a reload loses chat history.
+- **No SSE/streaming:** `POST /api/agent/run` is a single synchronous request/response, not
+  the SSE event stream ARCHITECTURE.md §9 describes. The frontend's client-side step-reveal
+  timers only pace the *display* of steps the backend already finished — a deliberate scope
+  cut (task said "do not build elaborate backend infrastructure merely to demonstrate UI");
+  real streaming would need this endpoint rewritten as SSE and is a reasonable next step.
+
 # Current Repository State
 
 - `docs/` — full spec set (`PROTOTYPE_SPEC.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,
   this file) + `docs/references/` (10 UX screenshots).
-- **A real, running Vite + React 18 + TypeScript + Tailwind v4 app** implementing the chat/
-  agent UI foundation (see "UI Foundation Pass" below for the full file list). No backend —
-  everything is client-side React state + a scripted mock engine standing in for the real
-  agent loop.
-- `tests/` — Vitest unit/integration tests (10 passing): `mockEngine.test.ts`,
-  `Sidebar.test.tsx`, `ChatFlow.test.tsx`, `setup.ts`. No Playwright e2e suite committed yet
-  (IMPLEMENTATION_PLAN.md Phase 4's acceptance criteria calls for one — see Not Implemented).
-- `package.json` now has real dependencies (React, Vite, Tailwind v4, lucide-react, Vitest,
-  Testing Library, ESLint) and working `dev`/`build`/`typecheck`/`lint`/`test` scripts.
+- **A real, running Vite + React 18 + TypeScript + Tailwind v4 frontend** on the ported
+  Commas shell, plus **a real Node/TypeScript/Hono backend** (`server/`) implementing the
+  agent runtime, MCP client, and mock Commas MCP server — see "Commas Tool Layer" above for
+  the full file list. `npm run dev:all` runs both together (or `dev` + `dev:server`
+  separately); Vite proxies `/api` to the backend.
+- `tests/` — 36 Vitest tests passing: frontend (`liteMarkdown`, `Sidebar`, `ChatFlow` —
+  the last now mocks `fetch` at the network boundary) + `tests/server/` (errors, registry,
+  mcpClient, runtime, app — exercising the real backend, stub LLM). No Playwright e2e suite
+  committed yet (IMPLEMENTATION_PLAN.md Phase 4's acceptance criteria calls for one).
+- `package.json` has both frontend and backend dependencies now (`@anthropic-ai/sdk`,
+  `@modelcontextprotocol/sdk`, `hono`, `@hono/node-server`, `zod`, `dotenv`, `tsx`,
+  `concurrently`, plus the existing frontend stack) and `dev`/`dev:server`/`dev:all`/
+  `build`/`typecheck`/`lint`/`test` scripts. Three tsconfig projects now: app (frontend),
+  node (Vite config), **server** (backend — new).
+- `.env.example` documents `ANTHROPIC_API_KEY`, `COMMAS_MCP_MODE`, `COMMAS_MCP_URL`,
+  `COMMAS_API_KEY`, `PORT`. No real `.env` file exists in this repo/environment.
 - Git: local repo on `main`, **no remote**.
 
 # Completed
@@ -487,30 +656,47 @@ inspection is a candidate for a later pass if evidence traceability returns as a
   contextual AI per page; agent panel as sibling main-surface — see "Commas Foundation
   Migration" below. Verified: typecheck/lint/16 tests/build + full browser walkthrough,
   zero console errors.
+- **Commas tool layer / real agent backend** (2026-08-21) — real Node/Hono backend, real
+  MCP client + mock Commas MCP server (`@modelcontextprotocol/sdk`), real agent runtime loop,
+  real (untested-live) Anthropic client + tested-live deterministic stub, minimal frontend
+  wiring to call it — see "Commas Tool Layer" above. Verified: typecheck/lint/36 tests/build
+  + live browser walkthrough against the real running backend (4/4 scenarios incl. a real
+  tool failure), zero console errors, zero secrets in the client bundle (grepped).
 
 # In Progress
 
-- Nothing. **Next up:** replace the mock engine with the real backend + agent loop + MCP
-  client (`IMPLEMENTATION_PLAN.md` Phases 2–3), and/or the full Resolution Center port
-  (Phase 1) — see "Next Step" below for the recommended order.
+- Nothing. **Next up:** get an `ANTHROPIC_API_KEY` from the user and confirm the real
+  `AnthropicLlmClient` path live (currently real code, never actually invoked); implement
+  write tools + the approval-card UI together (they depend on each other); consider adding
+  the remaining 8 documented `fanbasis_*` read tools; SSE streaming if the synchronous
+  request/response proves limiting.
 
 # Not Implemented
 
-- **Backend, agent loop, LLM calls, MCP client, mock or real MCP servers.** Everything
-  agent-shaped in the UI is driven by `src/lib/mockEngine.ts`, a pattern-matched script — see
-  "What Remains Mocked."
-- ~~Full Resolution Center~~ **Done in the Commas Foundation Migration** (list + detail
-  ported). Still not ported from the old repo: `SourceView` (per-evidence source-record
-  pages) and the scripted `EvidenceCopilot` cards (superseded by the agent panel).
-- **Write-action / approval-card flow** (spec §4.5–4.6) — the mock engine only performs
-  reads; no write tool, no approval card UI exists yet.
+- **Live-tested real LLM calls.** `AnthropicLlmClient` is complete, real code but has never
+  been exercised — no `ANTHROPIC_API_KEY` in this environment. Every test and live-browser
+  check this session ran on `StubLlmClient`. See "Commas Tool Layer" § What's still not real.
+- **Live-tested real Commas MCP connection.** `connectReal()` is complete, real code, tested
+  only against a deliberately unreachable address. No Commas API key exists here.
+- ~~Full Resolution Center~~ **Done** (list + detail ported). Still not ported from the old
+  repo: `SourceView` (per-evidence source-record pages) and the scripted `EvidenceCopilot`
+  cards (superseded by the agent panel).
+- **Write-action / approval-card flow** (spec §4.5–4.6) — real write tools on the Commas
+  platform are documented (charge, refund, discount CRUD, subscription changes) but
+  deliberately not implemented: there's no approval-card UI to gate them yet, and shipping a
+  write tool without a confirmation gate would be unsafe.
+- **8 of the 11 documented `fanbasis_*` read tools** (discount codes, checkout sessions,
+  payment methods, etc.) — only customers/list-transactions/get-transaction are implemented,
+  per the task's "small set of useful capabilities" scope.
+- **Non-Commas connected sources** (Google Calendar, Zoom, Fathom, Gmail, CRM) have no
+  backend/MCP behind them at all — still pure UI/sources-menu mocks, out of scope for "the
+  Commas tool layer."
 - **Persistence** — chat/credits/sources state lives only in React context; a page reload
   loses everything (ARCHITECTURE.md §10's JSON-snapshot store isn't built).
-- **Playwright e2e suite** committed to the repo (Phase 4's acceptance criteria). This
-  session's visual verification used an ad-hoc Playwright script run from scratch space, not
-  a committed test.
-- Real LLM/MCP "real mode," authentication, deployment — unchanged from before, still Phase
-  3+/deferred.
+- **SSE/streaming** — `POST /api/agent/run` is synchronous request/response, not
+  ARCHITECTURE.md §9's SSE event stream (deliberate scope cut, documented above).
+- **Playwright e2e suite** committed to the repo. Visual/functional verification this session
+  used ad-hoc Playwright scripts run from job scratch space, not committed tests.
 
 # Confirmed Technical Decisions
 
@@ -531,16 +717,24 @@ the user hadn't answered — flagged in Open Questions where an override is stil
   **implemented and running**, not just decided. State management is React Context
   (`ChatStoreProvider`), no external state library — sufficient for the UI-only pass; revisit
   if backend integration (Phase 3) makes the context provider awkward.
-- **Backend:** Node 20+ / TypeScript / **Hono**, REST + SSE, single process.
-- **LLM:** `@anthropic-ai/sdk`, model `claude-opus-5`, adaptive thinking, SDK beta
-  tool-runner loop (manual loop as documented fallback), streaming; **real LLM calls**
-  in demo mode, **scripted LLM stub** in all automated tests.
-- **MCP:** `@modelcontextprotocol/sdk` self-hosted client; in-process mock MCP servers
-  (Commas + fathom/zoom/google-meet/clickfunnels); mock-first, with a guarded real-mode
-  config path (`COMMAS_MCP_MODE=real` + `COMMAS_ALLOW_REAL=1`, QA sandbox key only) that no
-  phase builds UI for.
-- **Mock dispute tools are namespaced `commas_*`** (not `fanbasis_*`) because they have no
-  real-platform equivalent — never blur that line.
+- **Backend:** Node 20+ / TypeScript / **Hono** — **implemented and running**
+  (`server/index.ts` + `@hono/node-server`). REST only so far, no SSE (deliberate scope cut,
+  see "Commas Tool Layer" § What's still not real).
+- **LLM:** `@anthropic-ai/sdk`, model `claude-opus-5`, adaptive thinking — **implemented**
+  (`server/llm/anthropicClient.ts`) but **never live-tested** (no API key in this
+  environment); manual per-turn loop (not the SDK's beta tool-runner — kept simple/explicit
+  for this scope) in `server/agent/runtime.ts`; **scripted stub** (`server/llm/stubClient.ts`)
+  is what every test and live check actually ran on.
+- **MCP:** `@modelcontextprotocol/sdk` self-hosted client — **implemented**
+  (`server/mcp/client.ts`). In-process mock Commas MCP server implemented
+  (`server/mcp/mockCommasServer.ts`, 4 tools: customers/transactions/transaction-detail/
+  dispute); external-source mock servers (fathom/zoom/etc.) were **not** built — those
+  sources have no MCP layer at all, still pure UI mocks. Guarded real-mode config path
+  implemented as designed: `COMMAS_MCP_MODE=real` + `COMMAS_MCP_URL` + `COMMAS_API_KEY`
+  (the `COMMAS_ALLOW_REAL` extra guard from the original design was simplified away — both
+  URL and key being unset is already a sufficient guard against accidental real-mode).
+- **Mock dispute tool is namespaced `commas_get_dispute`** (not `fanbasis_*`) because it has
+  no real-platform equivalent — implemented exactly per this decision, never blurred.
 - **Persistence:** in-memory store + JSON file snapshot (`data/state.json`, gitignored),
   behind a `ChatStore` interface.
 - **Credits pricing:** 1/message + 1/read call + 5/write call, backend-metered.
@@ -555,11 +749,15 @@ the user hadn't answered — flagged in Open Questions where an override is stil
 
 # Open Questions
 
-1. **Real LLM calls** are now baked into the spec (demo mode) — still needs the user to
-   supply `ANTHROPIC_API_KEY` and accept per-demo cost before Phase 3's live smoke test.
-   Automated tests never need it.
-2. **Real Commas MCP mode** is specced as guarded-optional and deferred; only becomes
-   actionable if the user supplies a QA sandbox key.
+1. **Real LLM calls.** The code path (`AnthropicLlmClient`) is now fully implemented and
+   wired — the only missing piece is the user supplying `ANTHROPIC_API_KEY` (in `.env`) and
+   accepting per-request cost. Nothing else should need to change; `GET /api/health`'s
+   `llmMode` field flips from `"stub"` to `"anthropic"` automatically once the key is set.
+2. **Real Commas MCP mode.** The code path (`CommasMcpClient.connectReal`) is now fully
+   implemented and wired — needs `COMMAS_MCP_MODE=real`, `COMMAS_MCP_URL` (the Railway URL
+   recorded in this file's Integrations section, or whatever the current real endpoint is),
+   and a QA sandbox `COMMAS_API_KEY`. Only ever use a sandbox key, never production — write
+   tools aren't implemented yet, but the read tools would hit a real account.
 3. **GitHub:** create a remote for this repo? (None exists; old repo is public.) Ask before
    pushing.
 4. Exact write-tool list of the real Commas MCP server (docs inconsistent: 11 vs 27 vs 30+).
@@ -593,27 +791,31 @@ stub-LLM testing strategy, credits pricing, `commas_*` namespacing for mock disp
 
 # Next Steps
 
-The build order lives in `IMPLEMENTATION_PLAN.md` (Phases 0–6). This session delivered the
-frontend half of Phase 0 plus most of Phase 4's UI surface **ahead of schedule and with mocks
-in place of Phases 2–3**, per this session's explicit "UI only, no agent, no MCP yet"
-instruction. Concretely still open from the plan:
+Phases 2 (mock MCP servers + tool registry) and 3 (agent runtime) from `IMPLEMENTATION_PLAN.md`
+are now substantially done — see "Commas Tool Layer" above for exactly what's real vs. still
+stubbed. What's concretely left:
 
-1. **Phase 0 (remainder):** no backend exists yet — no Hono server, no SSE, no shared types
-   package with a server side to share with.
-2. **Phase 1 (remainder):** `ResolutionCenterPage.tsx` is a placeholder, not the full port
-   (list, filters, evidence copilot) from `commas-ai-copilot`.
-3. **Phase 2:** no mock MCP servers exist — `mockEngine.ts` fakes their effect without the
-   MCP protocol, tool registry, or five actual servers described in ARCHITECTURE.md §7–8.
-4. **Phase 3:** no agent runtime, no LLM calls, no real event stream — `useChatStore.tsx`'s
-   `setTimeout` playback stands in for all of it.
-5. **Phase 4 (remainder):** no write/approval-card flow; no committed Playwright e2e suite.
-
-**Recommended next step:** build Phase 2 (mock MCP servers + tool registry) and Phase 3
-(agent runtime, wired to the *same* `useChatStore` UI surface built this session) so the real
-architecture replaces the mock engine without a UI rewrite — the components were built
-against the `Chat`/`ProgressStep`/`ToolSummaryItem` shapes in `src/lib/types.ts`, which
-already mirror ARCHITECTURE.md's real types. Obtain `ANTHROPIC_API_KEY` from the user before
-Phase 3's live smoke test (Open Question 1 — still unresolved).
+1. **Get `ANTHROPIC_API_KEY` from the user and verify `AnthropicLlmClient` live** — the
+   single highest-value next step. Set it in `.env`, run `npm run dev:server`, confirm
+   `GET /api/health` reports `llmMode: "anthropic"`, and re-run the same live-browser checks
+   this session did against the stub (customer lookup, transaction lookup, dispute lookup,
+   a deliberate tool failure) to confirm the real model behaves the same way.
+2. **Write tools + approval-card UI, together** — they're coupled: don't add a write tool
+   without the confirmation gate (PROTOTYPE_SPEC.md §4.5–4.6) to pair with it. This is the
+   next meaningful capability expansion.
+3. **Remaining `fanbasis_*` read tools** (discount codes, checkout sessions, payment
+   methods, subscribers) — same pattern as the 3 already implemented in
+   `mockCommasServer.ts` + `registry.ts`'s `KNOWN_TOOLS` map.
+4. **SSE streaming** for `POST /api/agent/run`, if the synchronous request/response proves
+   limiting for longer multi-step investigations (e.g., the flagship dispute-investigation
+   flow chaining several tools) — currently the client just waits for the full response.
+5. **Persistence** (ARCHITECTURE.md §10's backend JSON-snapshot store) — chat history still
+   doesn't survive a reload.
+6. **Non-Commas connected sources** (Google Calendar, Zoom, Fathom, Gmail, CRM) have zero
+   backend behind them — would need their own mock MCP servers following the same pattern,
+   if/when real value beyond the Commas-only scope is wanted.
+7. **Committed Playwright e2e suite** (this session, like prior ones, verified visually via
+   ad-hoc scripts in job scratch space, not committed tests).
 
 # Session Handoff
 
