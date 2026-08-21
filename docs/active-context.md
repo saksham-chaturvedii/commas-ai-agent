@@ -8,6 +8,9 @@
 > `useChatStore.tsx`'s `createChat()` — the same bug class as the Evidence Upload fix below —
 > that made the dispute AI panel render nothing at all after starting a new session post-
 > deletion. 82/82 tests pass (was 79); verified live across every case the task specified.
+> **Follow-up same day:** per direct user feedback on the live result, "Investigate with AI" is
+> now hidden entirely on resolved disputes (an earlier pass had deliberately kept it enabled —
+> see the amended note in "Resolved Disputes Are Read-Only" above).
 
 > **The "Add evidence" flow now supports real (mocked) file uploads** — multi-file selection,
 > drag & drop, client-side validation, a simulated Selected→Uploading→Processing→Ready
@@ -1360,14 +1363,15 @@ instruction.
   (`dispute.submittedResponse.text` + "Submitted on" + "Status: Submitted") instead of the
   editable textarea/Save draft/Submit response controls. Active disputes are completely
   unchanged.
-- **"Investigate with AI" stays enabled for resolved disputes** — deliberately, not disabled.
-  The stub LLM's dispute-intent branch (added in the earlier "Resolution Center Demo-
-  Readiness" pass) already answers why/evidence/draft/recommend/summarize questions correctly
-  for the `"resolved"` scenario ("This dispute is already resolved…", "No action needed…",
-  "there's nothing left to draft") — the architecture was already safe for this, so disabling
-  the button would have removed a working, informative capability for no reason. This is the
-  "whichever behavior is already consistent with the current architecture" choice the task
-  asked for.
+- **"Investigate with AI" is hidden entirely for resolved disputes** (`!isResolved &&`,
+  header row). An earlier pass of this same task deliberately kept it enabled — the stub LLM's
+  dispute-intent branch already answers resolved-case questions safely ("already resolved",
+  "nothing left to draft") — but the user reviewed the live result and asked for the button
+  removed outright for closed cases regardless, so a resolved dispute now shows no AI entry
+  point on the page at all. Active disputes are unaffected. The stub's resolved-case answers
+  (still exercised by `tests/server/disputeIntents.test.ts`) remain correct and available via
+  any other dispute-context chat that already exists for that record — this change only
+  removes the *button that starts one* from the resolved dispute's own page.
 
 ## Demo data added (Priya Nair, #2390)
 

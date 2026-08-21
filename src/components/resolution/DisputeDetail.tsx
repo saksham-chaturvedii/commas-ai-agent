@@ -262,10 +262,12 @@ export function DisputeDetail({
         </h1>
         <Badge variant={dispute.status === "Won" ? "success" : "warning"}>{dispute.status}</Badge>
         <div className="flex-1" />
-        <button type="button" className="btn-blue" onClick={onInvestigate}>
-          <Sparkles size={16} strokeWidth={1.75} />
-          Investigate with AI
-        </button>
+        {!isResolved && (
+          <button type="button" className="btn-blue" onClick={onInvestigate}>
+            <Sparkles size={16} strokeWidth={1.75} />
+            Investigate with AI
+          </button>
+        )}
       </div>
       <div className="pl-[5px] mt-1.5 text-[14px] leading-[20px] text-[#6b7280]">
         {dispute.amount} · {dispute.reason} · Evidence due {dispute.evidenceDueAt}{" "}
