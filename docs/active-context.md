@@ -1,11 +1,18 @@
 # Commas AI Agent — Active Context
 
-**Last updated:** 2026-08-21 · **Updated by:** Claude (chat sidebar cleanup + modal opacity fix)
+**Last updated:** 2026-08-21 · **Updated by:** Claude (Resolution Center demo-readiness + chat credit system)
 
-> **Two small polish fixes on top of the Dashboard pass below:** the Chat sidebar's redundant
-> "+" button (duplicate of "New chat") is removed — see "Chat Sidebar Cleanup" below — and the
-> Connected apps modal no longer lets page content bleed through it (was using the shared
-> `main-surface` class's 88%-opacity background, now solid white for that modal only).
+> **Resolution Center now has 5 realistic dispute cases with deterministic Agent answers, and
+> the chat credit system was rebuilt into a real total/used/remaining model with a mock
+> purchase flow.** See "Resolution Center Demo-Readiness" and "Chat Credit System" below for
+> the full account. 70/70 tests pass (was 48; +22 net this session); verified live in a
+> browser — all 5 dispute cases × all 5 demo-script questions, the hidden pipeline-test phrase,
+> and all 6 credit scenarios (A–F) from the task — zero console errors.
+
+> **Two small polish fixes from the prior session:** the Chat sidebar's redundant "+" button
+> (duplicate of "New chat") is removed — see "Chat Sidebar Cleanup" below — and the Connected
+> apps modal no longer lets page content bleed through it (was using the shared `main-surface`
+> class's 88%-opacity background, now solid white for that modal only).
 
 > **The Dashboard has been rebuilt against real Commas production screenshots** (not invented,
 > not ported from `commas-ai-copilot` — that repo has no Dashboard). See "Dashboard Visual
@@ -961,6 +968,215 @@ main-surface`'s shared definition in `index.css` is untouched, so every other su
   either. No test suite changes were needed — no existing test asserted on the removed button
   or the modal's exact background value.
 
+# Resolution Center Demo-Readiness (2026-08-21)
+
+The Resolution Center previously had exactly one hardcoded dispute (#2481, Sarah Johnson).
+This pass expands it to 5 realistic cases, one per Agent workflow the task asked to
+demonstrate, without touching the Resolution Center's existing UI/styling — only its data
+source became dynamic (per-dispute lookups instead of one hardcoded import).
+
+## 5 mock dispute cases added
+
+All in `src/lib/disputeData.ts` (UI-facing fields) and `server/mcp/mockCommasServer.ts`
+(agent-reasoning fields, kept in sync by hand — same ids/amounts/reasons/dates):
+
+| # | Dispute | Customer | Workflow | Status |
+|---|---|---|---|---|
+| 1 | #2481, $499.00 | Sarah Johnson | **Needs response** — Agent identifies a likely reason and recommends + drafts a response | Needs response |
+| 2 | #2502, $129.00 | Marcus Webb | **Missing evidence** — Agent names exactly what's missing before it will draft anything | Needs response |
+| 3 | #2417, $899.00 | Elena Cruz | **Evidence ready** — Agent confirms no gaps and recommends acting now | Needs response |
+| 4 | #2455, $249.00 | David Kim | **High-risk/uncertain** — Agent explicitly states it can't be confident, never guesses | Needs response |
+| 5 | #2390, $349.00 | Priya Nair | **Won/resolved** — Agent explains what happened and why it resolved in the seller's favor | Won |
+
+`ResolutionCenter.tsx` now renders all 5, filtered per tab by each case's `status` ("Needs
+response" tab shows 4, "Won" shows 1, "All disputes" shows all 5 with a Status column) — the
+previous single hardcoded `<button>` row became a `.map()` over `DISPUTES`, same markup per
+row. `DisputeDetail.tsx` takes a `disputeId` prop and looks up the case (`getDispute(id)`)
+instead of importing a single `dispute` constant; `App.tsx` tracks `selectedDisputeId` and
+remounts `DisputeDetail` (via `key={selectedDisputeId}`) on row click so per-dispute UI state
+(the manual evidence checklist, the draft textarea) never leaks between cases. Each case also
+seeds the manual evidence checklist's initial "Added" state (`initialEvidenceAdded`) — e.g.
+Elena Cruz's case opens with all 6 categories already marked Added, David Kim's with only 1 —
+so switching cases visibly feels like different real disputes, not one static screenshot
+reused 5 times.
+
+## Deterministic Agent answers, per case
+
+`server/llm/stubClient.ts` gained a new routing branch, checked *before* the existing
+multi-source "help me resolve this dispute" investigation chain (which is unchanged and still
+reachable): when the chat's `PageContext.kind === "dispute"` and the prompt matches one of 5
+intents (draft / evidence / summarize / recommend / why — specificity-ordered so
+"recommended" doesn't get misrouted), the stub issues a single `commas_get_dispute` tool call
+(shows "Checking dispute record…" in the UI — real tool-call demonstration, not skipped) and
+then answers deterministically from that dispute's mock-authored fields (`likelyReason`,
+`evidenceCollected`/`evidenceMissing`, `recommendedAction`, `draftResponse`, and — only for the
+high-risk and resolved cases — `uncertaintyNote`/`resolutionOutcome`). Every fact in every
+answer traces to a field on the dispute record; nothing is invented at answer time.
+
+**The uncertainty requirement (case 4) is real, not cosmetic**: David Kim's `why`/`recommend`/
+`summarize` answers all include the literal line "the evidence here doesn't clearly point one
+way or the other" and "I wouldn't commit to a response strategy without gathering more first"
+— verified both by an automated test and live in the browser (screenshot retained).
+
+## Demo-script suggested prompts
+
+`DISPUTE_SUGGESTED_CAPABILITIES` in `src/lib/mockData.ts` now shows exactly the task's 5
+prompts ("Why is this dispute open?", "What evidence do I need?", "Summarize this case",
+"Draft my response", "What should I do next?") instead of the previous 4 (which included
+"Help me resolve this dispute" and "Check delivery across connected apps" — still fully
+functional if typed manually, just no longer a suggestion chip, since the task asked for these
+5 specifically as the demo script).
+
+## Hidden deterministic test response
+
+Typing exactly `all roads lead to` (case-insensitive, whitespace-trimmed, checked before
+anything else in `nextStep()` so it works in any chat/context) gets the exact reply
+`info, my dawg.` — no tool call, no UI label anywhere referencing it, purely a pipeline
+smoke-test per the task's explicit instruction not to expose it as a visible feature.
+
+## Verification
+
+- `npx tsc -b`, `npm run lint` — clean.
+- **16 new backend tests** (`tests/server/disputeIntents.test.ts`): the hidden phrase (exact
+  match + case-insensitivity + non-substring-match), and at least 2 intents each for all 5
+  cases, asserting case-specific facts (e.g. case 2's evidence answer names the exact missing
+  categories; case 4's why/recommend answers contain the uncertainty language; case 5's
+  summarize answer contains the resolution date and evidence count).
+- **Live browser walkthrough** (screenshots retained in job scratch space): Resolution Center
+  tabs (Needs response shows 4, Won shows 1, All shows 5 with correct status badges) → each of
+  the 5 disputes opened in turn, AI panel re-contextualizing correctly every time → case-1 "why"
+  and "draft" questions answered correctly → hidden phrase confirmed inside a real dispute chat
+  → case 2's evidence gaps, case 3's "ready" recommendation, case 4's uncertainty language, and
+  case 5's resolution summary each confirmed against the live rendered text. Zero console
+  errors across the entire walkthrough.
+
+## Known limitations
+
+- Only the 5 demo-script intents get case-specific deterministic answers; other phrasings
+  (e.g. "help me resolve this dispute") still run the original multi-source investigation
+  chain, which remains hardcoded to dispute #2481's Sarah Johnson story regardless of which
+  dispute is actually selected — not extended to the other 4 cases in this pass (out of scope:
+  the task's 5 demo questions don't include it, and the chain's CRM/Gmail/Fathom/Zoom mock data
+  only exists for Sarah Johnson).
+- The manual evidence checklist's "Added" seed state is a UI-only convenience
+  (`initialEvidenceAdded`) — clicking "Add" for a new item still opens the same generic
+  `AddEvidenceModal`, unchanged from before this pass.
+- No "In review" or "Lost" tab cases exist yet — both tabs still show their original empty
+  state. Not required by the task's 5-case minimum, but a natural next case set if needed.
+
+# Chat Credit System (2026-08-21)
+
+Rebuilt the prototype's credit model from a single `balance`/`startingBalance` pair (which
+conflated "how much is left" with "how much was purchased") into the explicit total/used/
+remaining model the task specified, added a real mock purchase flow, and fixed the
+consumption rule to the task's explicit "1 message = 1 credit" (previously it also charged per
+tool step and 5 extra for write actions).
+
+## Credit state model
+
+`CreditsState` (`src/lib/types.ts`) is now:
+```ts
+interface CreditsState { totalCredits: number; usedCredits: number; }
+```
+`remainingCredits` is never stored — always derived as `max(0, totalCredits - usedCredits)`
+(`remainingCredits()` helper in `useChatStore.tsx`), so it can't drift out of sync. A fresh
+workspace starts at `{ totalCredits: 300, usedCredits: 0 }` (`INITIAL_CREDITS` in
+`mockData.ts`) — 300/300, per the task's explicit initialization (the old seed was 284/300;
+that was a "lived-in demo" choice from an earlier pass, superseded here since the task was
+explicit about starting fresh). Credits persist across navigation/reload via the existing
+localStorage mechanism; `loadPersisted()` now validates the persisted shape has
+`totalCredits`/`usedCredits` as numbers and falls back to a fresh 300/0 if old-shape data
+(`{balance, startingBalance}`) is still in someone's browser storage from before this pass.
+
+## Consumption rule
+
+Exactly 1 credit per `sendMessage()` call, charged synchronously the moment the send executes
+— not per tool step, not extra for write actions, and not charged again when an approve/
+decline continues the same turn (that's a continuation of the same message, not a new one
+sent). Opening a chat, switching conversations, opening the AI panel, and viewing history never
+touch credits — none of those code paths call `sendMessage`. `sendMessage` also refuses to run
+at all (no network call, no charge) if `remainingCredits(credits) <= 0` — defense in depth
+beyond the composer's own `disabled` state, so credits can never go negative even from a
+non-UI-mediated call.
+
+## Low-credit and exhausted states
+
+- **≤ 50 remaining** (`LOW_CREDIT_THRESHOLD` in `mockData.ts`): the credit pill switches to a
+  warning (orange) style. The pill is a real `<button>` now (was a non-interactive `<div>`) —
+  clicking it at any balance opens the Add More Credits modal.
+- **0 remaining**: the pill switches to a danger (red) style, the composer's textarea and Send
+  button are disabled (placeholder becomes "You're out of AI credits"), and a red message
+  appears below the composer — "Your workspace has run out of AI credits. **Buy Credits** to
+  keep chatting." — with an inline link straight into the same modal. The conversation itself
+  stays fully visible; nothing is hidden or reset.
+
+## Add More Credits modal
+
+New `src/components/chat/AddCreditsModal.tsx` — visually inspired by the Lovable credit modal
+the task referenced (icon badge → heading → subtext → bordered "Top up credits" section →
+selectable package rows → Cancel/Buy Credits), rebuilt entirely with Commas' own visual
+language (the agent-accent purple icon badge, `btn-dark`/`btn-secondary`, the app's existing
+card/border/radius tokens) — no Lovable branding, colors, or copy reused. 3 mock packages
+(`CREDIT_PACKAGES` in `mockData.ts`): +50/$30 (default selected), +100/$50, +250/$100, each a
+radio-style row with a black filled circle + checkmark on the selected one.
+
+**Mock purchase flow** (`addCredits(amount)` in `useChatStore.tsx`): clicking "Buy Credits"
+increases `totalCredits` by the package's credit amount — `usedCredits` is never touched, which
+is exactly what makes the task's edge case work: 271/300 remaining (29 used) + buy 50 → total
+becomes 350, used stays 29, remaining is `350 - 29 = 321` → **321/350**, not a reset to 350/350
+or a naive "just add to remaining" that would lose track of usage. The modal closes
+immediately, the credit pill and composer both react instantly (plain React state, no refetch
+needed), and a small green "N credits added" confirmation renders next to whichever control
+opened the modal (the header pill or the composer's exhausted-state CTA) for ~2.5s.
+
+## Development/demo testing mechanism
+
+A "Demo tools" section inside the Add More Credits modal — visually separated by a divider,
+labeled in small caps, distinct from the real purchase UI — has 4 small buttons ("Set
+remaining: 50 / 10 / 1 / 0") that call `setRemainingCreditsForDemo(remaining)`, which sets
+`usedCredits = totalCredits - remaining` directly. This is the "quickly exhaust credits without
+sending 300 messages" mechanism the task asked for. It's deliberately not a separate hidden
+surface — this is a demo prototype with no real prod/dev environment split, so the pragmatic
+choice was a small, clearly-labeled, visually de-emphasized control co-located with the one
+place a seller would naturally go to manage credits, rather than inventing a whole separate
+"dev mode."
+
+## Verification — all 6 scenarios (A–F) from the task
+
+- **A. Normal usage**: 300/300 → send → 299/300, confirmed both by an automated test and live
+  (watched the pill decrement 300→299→...→293 across 7 real messages sent across 5 different
+  dispute chats during the Resolution Center walkthrough above — proving the charge is global
+  to the workspace, not per-chat).
+- **B. Low credits**: dev-set to 50 → pill renders with the warning style → clicking it opens
+  Add More Credits. Confirmed both ways.
+- **C. Last credit**: dev-set to 1 → send → 0/300 → composer disabled → "Buy Credits" CTA
+  appears. Confirmed both ways.
+- **D. Exhausted**: at 0/300, attempting to send (including firing a raw `Enter` keydown at the
+  disabled textarea, bypassing the normal click path) never calls `fetch` — no request reaches
+  the agent — and the balance never goes negative. Confirmed by an automated test asserting the
+  mocked `fetch` was never invoked.
+- **E. Purchase from zero**: 0/300 → Buy Credits (composer CTA) → modal → Buy Credits (default
+  +50 selected) → 50/350, "50 credits added" toast, composer re-enabled. Confirmed both ways.
+- **F. Purchase while credits remain**: dev-set to 271/300 → open modal via the header pill →
+  Buy Credits (+50 default) → **321/350**, matching the task's worked example exactly.
+  Confirmed both ways.
+
+Automated coverage lives in `tests/CreditSystem.test.tsx` (6 tests, one per scenario, using the
+same `ChatStoreProvider` + `ChatWorkspace` harness pattern as `tests/ChatFlow.test.tsx`, with
+`CreditIndicator` mounted alongside it since credits render in the page header, not inside
+`ChatWorkspace` itself). A real bug was caught by test E while writing it: the purchase
+confirmation toast was originally rendered *inside* the composer's `{exhausted && ...}` block,
+so it vanished the instant the purchase succeeded and `exhausted` flipped to `false` — fixed by
+moving the toast to its own unconditional block.
+
+## Known limitation
+
+**No real billing or payment integration** — this is entirely mocked, as the task required.
+`addCredits()` just increments a number in React state (persisted to localStorage like
+everything else in this prototype); there is no Stripe, no subscriptions, no server-side
+credit ledger, and no real cost is ever charged. If this prototype needs real billing later,
+that's a new integration layer entirely, not an extension of `addCredits()`.
+
 # Current Repository State
 
 - `docs/` — full spec set (`PROTOTYPE_SPEC.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,
@@ -974,16 +1190,22 @@ main-surface`'s shared definition in `index.css` is untouched, so every other su
   agent runtime, MCP client, and mock Commas MCP server — see "Commas Tool Layer" above for
   the full file list. `npm run dev:all` runs both together (or `dev` + `dev:server`
   separately); Vite proxies `/api` to the backend.
-- `tests/` — **48 Vitest tests passing**: frontend (`liteMarkdown`, `Sidebar`, `ChatFlow` —
-  mocks `fetch` at the network boundary, covers multi-turn history, the approval flow, and
-  persistence) + `tests/server/` (errors, registry, mcpClient, runtime, app — exercising the
-  real backend with 6 source adapters and the write-approval pause/resume path, stub LLM). No
-  Playwright e2e suite committed yet (IMPLEMENTATION_PLAN.md Phase 4's acceptance criteria
-  calls for one; this and prior sessions verified live behavior via ad-hoc scripts instead).
+- `tests/` — **70 Vitest tests passing**: frontend (`liteMarkdown`, `Sidebar`, `ChatFlow`,
+  `CreditSystem` — mocks `fetch` at the network boundary, covers multi-turn history, the
+  approval flow, persistence, and all 6 credit scenarios A–F) + `tests/server/` (errors,
+  registry, mcpClient, runtime, app, `disputeIntents` — exercising the real backend with 6
+  source adapters, the write-approval pause/resume path, and all 5 demo dispute cases' stub
+  answers). No Playwright e2e suite committed yet (IMPLEMENTATION_PLAN.md Phase 4's acceptance
+  criteria calls for one; every session so far has verified live behavior via ad-hoc scripts
+  instead).
 - `server/adapters/` — the `SourceAdapter` abstraction (`types.ts`) plus 6 adapters:
   `commasAdapter.ts` and `meetingsAdapters.ts` (Fathom, Zoom — all MCP-backed) and
   `gmailAdapter.ts` / `calendarAdapter.ts` / `crmAdapter.ts` (API-style, no MCP). See
   "Conversation System, Source Adapters & Write-Approval Flow" above.
+- `src/lib/disputeData.ts` now holds 5 dispute cases (was 1) and `server/mcp/mockCommasServer.ts`
+  mirrors them with deeper agent-reasoning fields; `src/hooks/useChatStore.tsx`'s credit model
+  is `{totalCredits, usedCredits}` (was `{balance, startingBalance}`) — see "Resolution Center
+  Demo-Readiness" and "Chat Credit System" above.
 - `package.json` has both frontend and backend dependencies now (`@anthropic-ai/sdk`,
   `@modelcontextprotocol/sdk`, `hono`, `@hono/node-server`, `zod`, `dotenv`, `tsx`,
   `concurrently`, plus the existing frontend stack) and `dev`/`dev:server`/`dev:all`/
@@ -1036,6 +1258,17 @@ main-surface`'s shared definition in `index.css` is untouched, so every other su
   tooltips, narrow-width testing). Verified: typecheck/lint/48 tests (unchanged, true
   no-regression signal) + a live 5-screenshot browser walkthrough (Dashboard → AI panel →
   Resolution Center list → dispute detail → contextual AI panel), zero console errors.
+- **Chat sidebar cleanup + Connected apps modal opacity fix** (2026-08-21) — see "Chat Sidebar
+  Cleanup + Connected Apps Modal Opacity" above. Verified: typecheck/lint clean, live browser
+  checks for both, zero console errors.
+- **Resolution Center demo-readiness + chat credit system** (2026-08-21) — 5 realistic dispute
+  cases (needs-response, missing-evidence, evidence-ready, high-risk/uncertain, won/resolved)
+  each with deterministic per-case Agent answers to 5 demo-script questions, a hidden pipeline
+  test phrase, and a full total/used/remaining credit model with low/exhausted states and a
+  mock purchase flow — see "Resolution Center Demo-Readiness" and "Chat Credit System" above.
+  Verified: typecheck/lint/70 tests (+22 net) + an extensive live browser walkthrough covering
+  every dispute case, every demo question, the hidden phrase, and all 6 credit scenarios
+  (A–F) from the task, zero console errors throughout.
 
 # In Progress
 

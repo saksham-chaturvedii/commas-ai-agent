@@ -9,11 +9,12 @@ import { z } from "zod";
  * for that path) but no credentials for it are available in this environment, so this mock
  * stands in, matching the documented tool names/purpose (docs/active-context.md §Integrations).
  *
- * Data mirrors src/lib/disputeData.ts (Sarah Johnson, Dispute #2481, txn_8b3f2a1c9d, $499,
- * "Product not received", purchased Aug 2 2026, evidence due Aug 13) — kept in sync by hand.
+ * Data mirrors src/lib/disputeData.ts — 5 demo dispute cases (Sarah Johnson #2481, Marcus Webb
+ * #2502, Elena Cruz #2417, David Kim #2455, Priya Nair #2390), one per Agent workflow
+ * (docs/active-context.md — "Resolution Center Demo-Readiness") — kept in sync by hand.
  *
- * Tool set is deliberately small per the task's scope: customers, transactions, and the one
- * dispute in this prototype's scenario. `commas_get_dispute` and `commas_mark_dispute_
+ * Tool set is deliberately small per the task's scope: customers, transactions, and the
+ * disputes in this prototype's scenario. `commas_get_dispute` and `commas_mark_dispute_
  * response_ready` are namespaced `commas_` (not `fanbasis_`) because the real Commas platform
  * has no disputes API/evidence-submission API at all — confirmed gap, documented in
  * docs/active-context.md. `commas_mark_dispute_response_ready` is classified "write" in the
@@ -42,14 +43,35 @@ interface MockDispute {
   status: string;
   reason: string;
   amountCents: number;
+  customerName: string;
   customerEmail: string;
+  productName: string;
   openedAt: string;
   evidenceDueAt: string;
   responseStatus: "not_started" | "in_progress" | "ready";
+  /** Which of the 5 demo workflows this case demonstrates (docs/active-context.md —
+   * "Resolution Center Demo-Readiness"). Drives which deterministic answer shape
+   * server/llm/stubClient.ts produces for the why/evidence/draft/recommend/summarize intents —
+   * purely a mock-reasoning label, not a real Commas field. */
+  scenario: "needs_response" | "missing_evidence" | "evidence_ready" | "high_risk" | "resolved";
+  likelyReason: string;
+  evidenceCollected: string[];
+  evidenceMissing: string[];
+  recommendedAction: string;
+  draftResponse: string;
+  /** Only set for scenario "high_risk" — the agent must say this explicitly rather than
+   * guessing a confident answer. */
+  uncertaintyNote?: string;
+  /** Only set for scenario "resolved". */
+  resolutionOutcome?: string;
 }
 
 const CUSTOMERS: MockCustomer[] = [
   { id: "cus_sarahjohnson", name: "Sarah Johnson", email: "sarah.johnson@email.com" },
+  { id: "cus_marcuswebb", name: "Marcus Webb", email: "marcus.webb@email.com" },
+  { id: "cus_elenacruz", name: "Elena Cruz", email: "elena.cruz@email.com" },
+  { id: "cus_davidkim", name: "David Kim", email: "david.kim@email.com" },
+  { id: "cus_priyanair", name: "Priya Nair", email: "priya.nair@email.com" },
 ];
 
 const TRANSACTIONS: MockTransaction[] = [
@@ -61,18 +83,197 @@ const TRANSACTIONS: MockTransaction[] = [
     status: "succeeded",
     purchasedAt: "2026-08-02T14:32:00Z",
   },
+  {
+    id: "txn_7c91fe22ab",
+    customerEmail: "marcus.webb@email.com",
+    product: "1:1 Strategy Call",
+    amountCents: 12900,
+    status: "succeeded",
+    purchasedAt: "2026-08-12T09:10:00Z",
+  },
+  {
+    id: "txn_5a2d81ffec",
+    customerEmail: "elena.cruz@email.com",
+    product: "Elite Mentorship Package",
+    amountCents: 89900,
+    status: "succeeded",
+    purchasedAt: "2026-08-08T11:47:00Z",
+  },
+  {
+    id: "txn_3f7b90c114",
+    customerEmail: "david.kim@email.com",
+    product: "Growth Accelerator Course",
+    amountCents: 24900,
+    status: "succeeded",
+    purchasedAt: "2026-08-14T18:05:00Z",
+  },
+  {
+    id: "txn_9d4c22ab77",
+    customerEmail: "priya.nair@email.com",
+    product: "Pro Coaching Program",
+    amountCents: 34900,
+    status: "succeeded",
+    purchasedAt: "2026-07-30T10:22:00Z",
+  },
 ];
 
+/**
+ * 5 demo dispute cases, one per Agent workflow (docs/active-context.md — "Resolution Center
+ * Demo-Readiness"). Ids/amounts/reasons/dates mirror src/lib/disputeData.ts by hand; the
+ * agent-reasoning fields below (likelyReason, evidenceCollected/Missing, recommendedAction,
+ * draftResponse, uncertaintyNote, resolutionOutcome) exist ONLY here — they're what
+ * server/llm/stubClient.ts reads to answer "why/evidence/draft/recommend/summarize"
+ * deterministically per case, never fabricated at answer time.
+ */
 const DISPUTES: MockDispute[] = [
   {
     id: "2481",
     status: "needs_response",
     reason: "product_not_received",
     amountCents: 49900,
+    customerName: "Sarah Johnson",
     customerEmail: "sarah.johnson@email.com",
+    productName: "Pro Coaching Program",
     openedAt: "2026-08-09T00:00:00Z",
     evidenceDueAt: "2026-08-13T00:00:00Z",
     responseStatus: "not_started",
+    scenario: "needs_response",
+    likelyReason:
+      "Sarah engaged heavily with the product after purchase — 14 logins and 6 of 12 lessons completed, plus a " +
+      "42-minute onboarding call on Fathom. That pattern points to a forgotten-purchase or friendly-fraud dispute " +
+      "rather than genuine non-delivery.",
+    evidenceCollected: [],
+    evidenceMissing: ["Access & activity records", "Customer communications", "Transaction & payment details"],
+    recommendedAction:
+      "Add your access/activity records and transaction confirmation to the evidence checklist, then respond " +
+      "before the Aug 13 deadline with proof Sarah received and used the product.",
+    draftResponse:
+      "The customer, Sarah Johnson, purchased the Pro Coaching Program on August 2, 2026. Our records show she " +
+      "logged into the course portal 14 times and completed 6 of 12 lessons, and attended a 42-minute onboarding " +
+      "call on August 4. This level of engagement is inconsistent with a claim of non-delivery — the product was " +
+      "clearly delivered and actively used. We respectfully ask that this dispute be resolved in our favor.",
+  },
+  {
+    id: "2502",
+    status: "needs_response",
+    reason: "product_unacceptable",
+    amountCents: 12900,
+    customerName: "Marcus Webb",
+    customerEmail: "marcus.webb@email.com",
+    productName: "1:1 Strategy Call",
+    openedAt: "2026-08-15T00:00:00Z",
+    evidenceDueAt: "2026-08-22T00:00:00Z",
+    responseStatus: "not_started",
+    scenario: "missing_evidence",
+    likelyReason:
+      "Marcus says the session didn't match what was advertised. We don't yet have the call recording or the " +
+      "original offer page on file, so there's no way to confirm what was actually promised or delivered.",
+    evidenceCollected: ["Transaction & payment details"],
+    evidenceMissing: ["Product description & offer details", "Access & activity records", "Customer communications"],
+    recommendedAction:
+      "Collect the missing evidence before responding — without the offer page and a delivery record, a " +
+      "response is unlikely to succeed. Start with the product listing shown at time of purchase.",
+    draftResponse:
+      "I don't have enough evidence on file yet to draft a strong response for this one. Add the product " +
+      "description shown at checkout, the call/access record, and any support messages with Marcus — once " +
+      "those are in, ask me to draft again and I'll write the response.",
+  },
+  {
+    id: "2417",
+    status: "needs_response",
+    reason: "duplicate",
+    amountCents: 89900,
+    customerName: "Elena Cruz",
+    customerEmail: "elena.cruz@email.com",
+    productName: "Elite Mentorship Package",
+    openedAt: "2026-08-11T00:00:00Z",
+    evidenceDueAt: "2026-08-25T00:00:00Z",
+    responseStatus: "in_progress",
+    scenario: "evidence_ready",
+    likelyReason:
+      "Elena was charged twice for the same purchase due to a checkout retry — the transaction log shows two " +
+      "charges seconds apart for the same cart, both for the Elite Mentorship Package.",
+    evidenceCollected: [
+      "Transaction & payment details",
+      "Customer & account information",
+      "Access & activity records",
+      "Product description & offer details",
+      "Terms & refund policy",
+      "Customer communications",
+    ],
+    evidenceMissing: [],
+    recommendedAction:
+      "You already have everything you need. Either refund the duplicate charge directly or respond with the " +
+      "transaction log showing both charges before Aug 25 — either resolves this cleanly.",
+    draftResponse:
+      "Our transaction log shows Elena Cruz was charged twice for the same order — transaction txn_5a2d81ffec " +
+      "and a duplicate charge seconds later, both for the Elite Mentorship Package on August 8, 2026. This was a " +
+      "checkout-retry duplicate, not two separate purchases. We are refunding the duplicate charge and ask that " +
+      "this dispute be closed accordingly.",
+  },
+  {
+    id: "2455",
+    status: "needs_response",
+    reason: "product_not_received",
+    amountCents: 24900,
+    customerName: "David Kim",
+    customerEmail: "david.kim@email.com",
+    productName: "Growth Accelerator Course",
+    openedAt: "2026-08-17T00:00:00Z",
+    evidenceDueAt: "2026-08-24T00:00:00Z",
+    responseStatus: "not_started",
+    scenario: "high_risk",
+    likelyReason:
+      "The signals are mixed: David never logged into the course portal, but he also never opened a support " +
+      "ticket or replied to the onboarding email. That's consistent with either genuine non-delivery or simple " +
+      "non-engagement — the data alone can't tell us which.",
+    evidenceCollected: ["Transaction & payment details"],
+    evidenceMissing: ["Access & activity records", "Customer communications"],
+    uncertaintyNote:
+      "I want to be upfront: the evidence here doesn't clearly point one way or the other. I wouldn't commit to " +
+      "a response strategy without gathering more first — treating this as clear-cut friendly fraud would be " +
+      "guessing, not reasoning from the data.",
+    recommendedAction:
+      "This one's genuinely uncertain. Before responding, check whether the delivery/access email actually " +
+      "reached David and whether support ever heard from him. Don't assume friendly fraud without more signal.",
+    draftResponse:
+      "I can draft something, but I want to flag that the evidence for this case is inconclusive — David shows " +
+      "no login activity, but also no support contact, so I can't confidently claim the product was used. A " +
+      "safer starting draft: \"We show transaction txn_3f7b90c114 completed successfully on August 14, 2026, " +
+      "granting immediate access to the Growth Accelerator Course. We're gathering additional access records " +
+      "and will follow up with further evidence.\" I'd firm this up once you have activity or communication " +
+      "records rather than relying on transaction proof alone.",
+  },
+  {
+    id: "2390",
+    status: "won",
+    reason: "product_not_received",
+    amountCents: 34900,
+    customerName: "Priya Nair",
+    customerEmail: "priya.nair@email.com",
+    productName: "Pro Coaching Program",
+    openedAt: "2026-08-03T00:00:00Z",
+    evidenceDueAt: "2026-08-07T00:00:00Z",
+    responseStatus: "ready",
+    scenario: "resolved",
+    likelyReason:
+      "Priya disputed as \"product not received,\" but she had already logged in 18 times and attended a " +
+      "coaching call before filing — a classic friendly-fraud pattern.",
+    evidenceCollected: [
+      "Transaction & payment details",
+      "Customer & account information",
+      "Access & activity records",
+      "Product description & offer details",
+      "Terms & refund policy",
+      "Customer communications",
+    ],
+    evidenceMissing: [],
+    recommendedAction: "No action needed — this case is closed and resolved in your favor.",
+    resolutionOutcome:
+      "Won on August 9, 2026. The seller submitted evidence of 18 portal logins and a signed onboarding-call " +
+      "attendance record before the deadline, and the card network ruled in the seller's favor. No further " +
+      "action is needed.",
+    draftResponse: "This dispute is already resolved — there's nothing left to draft or submit.",
   },
 ];
 

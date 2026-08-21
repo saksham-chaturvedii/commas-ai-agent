@@ -22,9 +22,12 @@ import { runAgentTurn, approveAgentAction, type AgentRunPlan, type ConversationT
  */
 
 const STEP_INTERVAL_MS = 650;
+/** The only credit-consumption rule in this prototype: sending a message costs exactly 1
+ * credit, charged once per sendMessage call — never per tool step, never per write action, and
+ * never again when an approve/decline continues the same turn (docs/active-context.md — "Chat
+ * Credit System"). Opening a chat, switching conversations, opening the AI panel, and viewing
+ * history never touch credits. */
 const CREDIT_COST_PER_MESSAGE = 1;
-const CREDIT_COST_PER_STEP = 1;
-const CREDIT_COST_PER_WRITE = 5;
 /** How many prior turns to send the agent for conversation memory — capped so a long chat's
  * payload doesn't grow unbounded (server/app.ts enforces the same cap defensively). */
 const HISTORY_TURN_LIMIT = 20;
@@ -36,6 +39,15 @@ interface PersistedShape {
   credits: CreditsState;
 }
 
+function isValidCreditsShape(c: unknown): c is CreditsState {
+  return (
+    typeof c === "object" &&
+    c !== null &&
+    typeof (c as CreditsState).totalCredits === "number" &&
+    typeof (c as CreditsState).usedCredits === "number"
+  );
+}
+
 function loadPersisted(): PersistedShape | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -45,11 +57,17 @@ function loadPersisted(): PersistedShape | null {
     return {
       chats: parsed.chats,
       sources: Array.isArray(parsed.sources) ? parsed.sources : SOURCES,
-      credits: parsed.credits ?? INITIAL_CREDITS,
+      // Falls back to a fresh 300/0 balance if localStorage still holds the old
+      // {balance, startingBalance} shape from before the credit-system rebuild.
+      credits: isValidCreditsShape(parsed.credits) ? parsed.credits : INITIAL_CREDITS,
     };
   } catch {
     return null;
   }
+}
+
+function remainingCredits(c: CreditsState) {
+  return Math.max(0, c.totalCredits - c.usedCredits);
 }
 
 function persist(state: PersistedShape) {
@@ -84,6 +102,13 @@ interface ChatStoreValue {
   toggleChatSource: (chatId: string, sourceId: SourceId) => void;
   connectSource: (sourceId: SourceId) => void;
   disconnectSource: (sourceId: SourceId) => void;
+  /** Mock purchase — increases totalCredits only, never touches usedCredits (see
+   * CreditsState's doc comment for why that's what makes the "271/300 → +50 → 321/350"
+   * edge case work correctly). */
+  addCredits: (amount: number) => void;
+  /** Dev/demo-only: jump straight to a given remaining balance without sending N messages.
+   * Not surfaced as a normal user-facing action — see AddCreditsModal's "Demo tools" footer. */
+  setRemainingCreditsForDemo: (remaining: number) => void;
   resetDemo: () => void;
 }
 
@@ -96,10 +121,6 @@ function newId(prefix: string) {
 function chatTitleFrom(text: string) {
   const trimmed = text.trim();
   return trimmed.length > 60 ? `${trimmed.slice(0, 57)}…` : trimmed;
-}
-
-function stepCost(steps: ProgressStep[]) {
-  return steps.reduce((sum, s) => sum + (s.classification === "write" ? CREDIT_COST_PER_WRITE : CREDIT_COST_PER_STEP), 0);
 }
 
 function historyFor(chat: Chat): ConversationTurn[] {
@@ -215,14 +236,14 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
 
   /** Shared handling for both a fresh agent run and an approve/decline continuation: animate
    * any steps the backend already executed, then either finalize with an answer/error, or
-   * pause on a new pendingApproval. */
+   * pause on a new pendingApproval. Never touches credits — the 1-credit cost is charged once,
+   * up front, in sendMessage itself; an approve/decline continuation is part of the same turn,
+   * not a new "message sent" event, so it costs nothing further. */
   const applyPlan = useCallback(
-    (chatId: string, plan: AgentRunPlan, creditSpend: number) => {
+    (chatId: string, plan: AgentRunPlan) => {
       if (cancelledRef.current) return;
       setRunSteps(plan.steps);
       setVisibleStepIds([]);
-
-      let spend = creditSpend;
 
       plan.steps.forEach((s, i) => {
         const t = window.setTimeout(
@@ -246,7 +267,6 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
             prompt: lastPromptRef.current,
           });
           setRunPhase("awaiting_approval");
-          setCredits((prev) => ({ ...prev, balance: Math.max(0, prev.balance - spend) }));
           return;
         }
 
@@ -266,7 +286,6 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
           ),
         );
         setChatStatus(chatId, plan.error ? "error" : "idle");
-        setCredits((prev) => ({ ...prev, balance: Math.max(0, prev.balance - spend) }));
         setRunPhase("done");
         window.setTimeout(() => {
           setRunChatId(null);
@@ -288,9 +307,16 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       const chat = chats.find((c) => c.id === chatId);
       if (!chat) return;
 
+      // Defense in depth beyond the composer's own disabled state: never execute a send (or
+      // charge a credit) once the workspace is out of credits.
+      if (remainingCredits(credits) <= 0) return;
+
       const userMessage: ChatMessage = { id: newId("m"), role: "user", text: trimmed, ts: new Date().toISOString() };
       const history = historyFor(chat);
       lastPromptRef.current = trimmed;
+
+      // The only credit charge for this turn — see CREDIT_COST_PER_MESSAGE's doc comment.
+      setCredits((prev) => ({ ...prev, usedCredits: Math.min(prev.totalCredits, prev.usedCredits + CREDIT_COST_PER_MESSAGE) }));
 
       setChats((prev) =>
         prev.map((c) =>
@@ -339,10 +365,10 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
             },
           };
         }
-        applyPlan(chatId, plan, CREDIT_COST_PER_MESSAGE + stepCost(plan.steps));
+        applyPlan(chatId, plan);
       })();
     },
-    [chats, clearTimers, applyPlan],
+    [chats, credits, clearTimers, applyPlan],
   );
 
   const resolveApproval = useCallback(
@@ -378,7 +404,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
             error: { code: "server_unavailable", message: "Couldn't reach the agent to confirm that action." },
           };
         }
-        applyPlan(chatId, plan, decision === "decline" ? 0 : stepCost(plan.steps));
+        applyPlan(chatId, plan);
       })();
     },
     [pendingApproval, chats, clearTimers, applyPlan],
@@ -411,6 +437,14 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
 
   const disconnectSource = useCallback((sourceId: SourceId) => {
     setSources((prev) => prev.map((s) => (s.id === sourceId ? { ...s, connection: "not_connected" } : s)));
+  }, []);
+
+  const addCredits = useCallback((amount: number) => {
+    setCredits((prev) => ({ ...prev, totalCredits: prev.totalCredits + amount }));
+  }, []);
+
+  const setRemainingCreditsForDemo = useCallback((remaining: number) => {
+    setCredits((prev) => ({ ...prev, usedCredits: Math.max(0, prev.totalCredits - remaining) }));
   }, []);
 
   const resetDemo = useCallback(() => {
@@ -446,6 +480,8 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       toggleChatSource,
       connectSource,
       disconnectSource,
+      addCredits,
+      setRemainingCreditsForDemo,
       resetDemo,
     }),
     [
@@ -466,6 +502,8 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       toggleChatSource,
       connectSource,
       disconnectSource,
+      addCredits,
+      setRemainingCreditsForDemo,
       resetDemo,
     ],
   );

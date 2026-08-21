@@ -94,9 +94,12 @@ export interface PendingApproval {
   input: Record<string, unknown>;
 }
 
+/** remainingCredits is always derived as totalCredits - usedCredits, never stored — see
+ * useChatStore.tsx's `remainingCredits()` helper. Purchasing credits increases totalCredits;
+ * it never resets or decreases usedCredits. */
 export interface CreditsState {
-  balance: number;
-  startingBalance: number;
+  totalCredits: number;
+  usedCredits: number;
 }
 
 export interface SuggestedCapability {

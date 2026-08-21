@@ -13,14 +13,15 @@ import {
 import { Badge } from "../shell/Badge";
 import { CardTitle } from "./CardTitle";
 import { AddEvidenceModal } from "./AddEvidenceModal";
-import { dispute, evidenceCategories } from "../../lib/disputeData";
+import { evidenceCategories, getDispute } from "../../lib/disputeData";
 
 /**
  * Dispute Detail page, ported from commas-ai-copilot and evolved: the old prototype's inline
  * "Collect evidence with AI" scripted copilot flow is replaced by "Investigate with AI",
  * which opens the contextual agent panel on the right (the agent panel IS the evolution of
  * that copilot card). The manual evidence checklist, response draft box, and the
- * dispute/customer/transaction detail cards are ported as-is.
+ * dispute/customer/transaction detail cards are ported as-is. Parameterized by `disputeId` so
+ * all 5 demo cases (docs/active-context.md) share this one page.
  */
 
 function DetailRow({
@@ -43,8 +44,8 @@ function DetailRow({
   );
 }
 
-function ManualEvidenceCard() {
-  const [added, setAdded] = useState<Set<string>>(new Set());
+function ManualEvidenceCard({ initialAdded }: { initialAdded: string[] }) {
+  const [added, setAdded] = useState<Set<string>>(new Set(initialAdded));
   const [modalFor, setModalFor] = useState<string | null>(null);
 
   return (
@@ -98,19 +99,24 @@ function ManualEvidenceCard() {
 }
 
 export function DisputeDetail({
+  disputeId,
   onBack,
   onInvestigate,
 }: {
+  disputeId: string;
   onBack: () => void;
   onInvestigate: () => void;
 }) {
   const [response, setResponse] = useState("");
   const [justSaved, setJustSaved] = useState(false);
+  const dispute = getDispute(disputeId);
 
   const saveDraft = () => {
     setJustSaved(true);
     setTimeout(() => setJustSaved(false), 2000);
   };
+
+  if (!dispute) return null;
 
   return (
     <div className="main-surface flex flex-col p-0 min-h-[370px] pt-[30px] px-5 pb-5 flex-1 overflow-y-auto">
@@ -133,7 +139,7 @@ export function DisputeDetail({
         >
           Dispute #{dispute.id}
         </h1>
-        <Badge variant="warning">{dispute.status}</Badge>
+        <Badge variant={dispute.status === "Won" ? "success" : "warning"}>{dispute.status}</Badge>
         <div className="flex-1" />
         <button type="button" className="btn-blue" onClick={onInvestigate}>
           <Sparkles size={16} strokeWidth={1.75} />
@@ -151,7 +157,7 @@ export function DisputeDetail({
       <div className="flex gap-5 mt-5 items-start">
         {/* left column */}
         <div className="flex flex-col gap-5 flex-[2] min-w-0">
-          <ManualEvidenceCard />
+          <ManualEvidenceCard initialAdded={dispute.initialEvidenceAdded} />
 
           {/* response card */}
           <div className="content-card" style={{ padding: 24, gap: 0 }}>

@@ -3,6 +3,7 @@ import { ArrowUp, Square } from "lucide-react";
 import type { Chat } from "../../lib/types";
 import { useChatStore } from "../../hooks/useChatStore";
 import { SourcesMenu } from "./SourcesMenu";
+import { AddCreditsModal } from "./AddCreditsModal";
 
 /**
  * Chat composer — shared between the empty state ("hero") and the bottom bar of an
@@ -19,10 +20,17 @@ export function ChatComposer({
 }) {
   const { sendMessage, cancelRun, runChatId, runPhase, credits } = useChatStore();
   const [value, setValue] = useState("");
+  const [buyOpen, setBuyOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
 
   const isRunningHere = runChatId === chat.id && runPhase === "running";
-  const exhausted = credits.balance <= 0;
+  const exhausted = credits.totalCredits - credits.usedCredits <= 0;
   const disabled = exhausted || (runChatId !== null && !isRunningHere);
+
+  const handlePurchased = (amount: number) => {
+    setToast(`${amount} credits added`);
+    window.setTimeout(() => setToast(null), 2500);
+  };
 
   const submit = () => {
     if (!value.trim() || disabled || isRunningHere) return;
@@ -74,10 +82,24 @@ export function ChatComposer({
         </div>
       </div>
       {exhausted && (
-        <p className="text-[12px] text-[var(--color-danger-text)] mt-2 text-center">
-          You're out of AI credits for this demo. Use "Reset demo" in the credits indicator to restore your balance.
-        </p>
+        <div className="mt-2 text-center">
+          <p className="text-[12px] text-[var(--color-danger-text)]">
+            Your workspace has run out of AI credits.{" "}
+            <button
+              type="button"
+              onClick={() => setBuyOpen(true)}
+              className="font-semibold text-[var(--color-primary)] hover:underline"
+            >
+              Buy Credits
+            </button>{" "}
+            to keep chatting.
+          </p>
+        </div>
       )}
+      {toast && (
+        <p className="text-[12px] font-medium text-[var(--color-success-text)] mt-2 text-center">{toast}</p>
+      )}
+      {buyOpen && <AddCreditsModal onClose={() => setBuyOpen(false)} onPurchased={handlePurchased} />}
     </div>
   );
 }

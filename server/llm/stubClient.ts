@@ -20,17 +20,56 @@ const DISPUTE_CHAIN = ["commas_get_dispute", "crm_get_contact", "gmail_search_th
  * assistant reply), which silently broke follow-up lookups against conversation history. */
 const EMAIL_REGEX = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/;
 
+/** One deterministic test response to verify the chat pipeline end to end — prototype-only,
+ * not a documented or user-facing feature (intentionally not listed in any suggestion chip or
+ * help text). Checked before anything else so it works regardless of chat/dispute context. */
+const PIPELINE_TEST_PHRASE = "all roads lead to";
+const PIPELINE_TEST_REPLY = "info, my dawg.";
+
+type DisputeIntent = "draft" | "evidence" | "summarize" | "recommend" | "why";
+
+/** Which of the 5 demo-script questions (docs/active-context.md — "Resolution Center
+ * Demo-Readiness") the user is asking, checked in specificity order so overlapping words
+ * ("recommended" containing "recommend") resolve to the intended intent. */
+function detectDisputeIntent(p: string): DisputeIntent | undefined {
+  if (/\bdraft\b/.test(p)) return "draft";
+  if (/evidence/.test(p)) return "evidence";
+  if (/summar/.test(p)) return "summarize";
+  if (/\brecommend|next step|next action|what should i do/.test(p)) return "recommend";
+  if (/\bwhy\b/.test(p)) return "why";
+  return undefined;
+}
+
 export class StubLlmClient implements LlmClient {
   async nextStep(input: LlmStepInput): Promise<LlmStepResult> {
     const { userPrompt, availableTools, toolHistory, context, conversationHistory } = input;
     const hasTool = (name: string) => availableTools.some((t) => t.name === name);
     const p = userPrompt.toLowerCase();
 
+    if (p.trim() === PIPELINE_TEST_PHRASE) {
+      return { type: "final", text: PIPELINE_TEST_REPLY };
+    }
+
     if (availableTools.length === 0) {
       return { type: "final", text: "No sources are enabled for this chat — enable at least one in the sources menu and ask again." };
     }
 
     const calledNames = toolHistory.map((t) => t.toolName);
+
+    // The 5 demo-script questions get a short, specific answer grounded in a single dispute
+    // lookup — not the full multi-source investigation chain below, which stays reserved for
+    // "help me resolve this dispute" / "investigate" style prompts.
+    if (context?.kind === "dispute") {
+      const disputeIntent = detectDisputeIntent(p);
+      if (disputeIntent) {
+        if (!calledNames.includes("commas_get_dispute") && hasTool("commas_get_dispute")) {
+          return { type: "tool_call", toolCallId: newId(), toolName: "commas_get_dispute", input: { id: context.id } };
+        }
+        const disputeResult = toolHistory.find((t) => t.toolName === "commas_get_dispute")?.result;
+        return this.answerDisputeIntent(disputeIntent, disputeResult, context.id);
+      }
+    }
+
     const inDisputeChain = DISPUTE_CHAIN.some((name) => calledNames.includes(name));
     const wantsDisputeInvestigation =
       /\b(dispute|resolve)\b/.test(p) || (context?.kind === "dispute" && /\b(help|understand|investigate|why)\b/.test(p));
@@ -268,14 +307,101 @@ export class StubLlmClient implements LlmClient {
 
     return { type: "final", text: "Done." };
   }
+
+  /** Answers one of the 5 demo-script questions deterministically from a single
+   * commas_get_dispute result — no multi-source chain, no fabricated reasoning. Every fact
+   * used here comes straight from the tool result's mock-authored fields (docs/active-context.md
+   * — "Resolution Center Demo-Readiness"), never invented at answer time. */
+  private answerDisputeIntent(
+    intent: DisputeIntent,
+    result: { ok: boolean; data: unknown } | undefined,
+    disputeId: string,
+  ): LlmStepResult {
+    if (!result) {
+      return {
+        type: "final",
+        text: `Commas is turned off as a source for this chat, so I can't look up dispute #${disputeId}. Enable it in the sources menu and ask again.`,
+      };
+    }
+    if (!result.ok) {
+      const detail = typeof result.data === "string" ? result.data : "it may not exist";
+      return { type: "final", text: `I couldn't find dispute #${disputeId} — ${detail}.` };
+    }
+
+    const d = (result.data as { dispute: DisputeShape }).dispute;
+    const reasonPhrase = d.reason.replace(/_/g, " ");
+    const isResolved = d.scenario === "resolved";
+    const isHighRisk = d.scenario === "high_risk";
+
+    switch (intent) {
+      case "draft":
+        return { type: "final", text: d.draftResponse };
+
+      case "evidence": {
+        if (isResolved) {
+          return {
+            type: "final",
+            text: `This dispute is already resolved, so no further evidence is needed. For the record: ${d.resolutionOutcome}`,
+          };
+        }
+        if (d.evidenceMissing.length === 0) {
+          return {
+            type: "final",
+            text: `You already have everything you need: ${d.evidenceCollected.join(", ")}. I don't see any gaps — you're ready to respond.`,
+          };
+        }
+        const have = d.evidenceCollected.length > 0 ? ` You already have: ${d.evidenceCollected.join(", ")}.` : "";
+        return { type: "final", text: `Before responding, you're missing: ${d.evidenceMissing.join(", ")}.${have}` };
+      }
+
+      case "summarize": {
+        const lines = [
+          `Dispute #${d.id} — $${(d.amountCents / 100).toFixed(2)}, "${reasonPhrase}", filed by ${d.customerName}.`,
+          d.likelyReason,
+        ];
+        if (isResolved) lines.push(d.resolutionOutcome!);
+        else if (isHighRisk) lines.push(d.uncertaintyNote!);
+        else lines.push(d.recommendedAction);
+        return { type: "final", text: lines.join(" ") };
+      }
+
+      case "recommend": {
+        if (isResolved) {
+          return { type: "final", text: `No action needed — this case is closed. ${d.resolutionOutcome}` };
+        }
+        const caveat = isHighRisk ? `${d.uncertaintyNote} ` : "";
+        return { type: "final", text: `${caveat}${d.recommendedAction}` };
+      }
+
+      case "why": {
+        if (isResolved) {
+          return { type: "final", text: `This dispute is already resolved. ${d.resolutionOutcome}` };
+        }
+        const caveat = isHighRisk ? ` ${d.uncertaintyNote}` : "";
+        return {
+          type: "final",
+          text: `This dispute is open because the customer filed a "${reasonPhrase}" claim. ${d.likelyReason}${caveat}`,
+        };
+      }
+    }
+  }
 }
 
 interface DisputeShape {
   id: string;
   reason: string;
   amountCents: number;
+  customerName: string;
   openedAt: string;
   evidenceDueAt: string;
+  scenario: "needs_response" | "missing_evidence" | "evidence_ready" | "high_risk" | "resolved";
+  likelyReason: string;
+  evidenceCollected: string[];
+  evidenceMissing: string[];
+  recommendedAction: string;
+  draftResponse: string;
+  uncertaintyNote?: string;
+  resolutionOutcome?: string;
 }
 
 function isFollowupPhrase(p: string) {

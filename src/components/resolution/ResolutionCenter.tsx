@@ -16,13 +16,19 @@ import { ReasonPopover } from "./ReasonPopover";
 import { AmountFilterPopover, DateFilterPopover } from "./SimpleFilterPopover";
 import { PinwheelIcon } from "./PinwheelIcon";
 import { Badge } from "../shell/Badge";
-import { dispute } from "../../lib/disputeData";
+import { DISPUTES, type DisputeStatus } from "../../lib/disputeData";
 
 /**
  * Resolution Center list page, ported from commas-ai-copilot (tabs, filter pills, popovers,
- * dispute table). The old prototype's `phase` prop is dropped — this repo's dispute always
- * shows "Needs response" since submission lives outside this prototype's scope.
+ * dispute table). Renders all 5 demo dispute cases (docs/active-context.md — "Resolution
+ * Center Demo-Readiness"), filtered per tab by each case's `status`, so switching tabs and
+ * clicking between rows feels like a real product rather than a single static row.
  */
+
+const STATUS_VARIANT: Record<DisputeStatus, "warning" | "success"> = {
+  "Needs response": "warning",
+  Won: "success",
+};
 
 const TABS = [
   { key: "needs-response", label: "Needs response", icon: CircleAlert, empty: "No disputes need a response" },
@@ -43,7 +49,7 @@ const COL = {
 
 type PopoverKey = "reason" | "amount" | "dispute-date" | "evidence-due" | null;
 
-export function ResolutionCenter({ onOpenDispute }: { onOpenDispute: () => void }) {
+export function ResolutionCenter({ onOpenDispute }: { onOpenDispute: (id: string) => void }) {
   const [activeTab, setActiveTab] = useState<(typeof TABS)[number]["key"]>("needs-response");
   const [openPopover, setOpenPopover] = useState<PopoverKey>(null);
   const filtersRef = useRef<HTMLDivElement>(null);
@@ -68,7 +74,16 @@ export function ResolutionCenter({ onOpenDispute }: { onOpenDispute: () => void 
 
   const toggle = (key: PopoverKey) => () => setOpenPopover((cur) => (cur === key ? null : key));
 
-  const showTable = activeTab === "all" || activeTab === "needs-response";
+  const visibleDisputes =
+    activeTab === "all"
+      ? DISPUTES
+      : activeTab === "needs-response"
+        ? DISPUTES.filter((d) => d.status === "Needs response")
+        : activeTab === "won"
+          ? DISPUTES.filter((d) => d.status === "Won")
+          : []; // no "in review" / "lost" cases in this prototype's demo set yet
+
+  const showTable = visibleDisputes.length > 0;
   const showStatus = activeTab === "all";
   const activeMeta = TABS.find((t) => t.key === activeTab)!;
 
@@ -178,32 +193,38 @@ export function ResolutionCenter({ onOpenDispute }: { onOpenDispute: () => void 
             )}
           </div>
 
-          {/* data row */}
-          <button
-            type="button"
-            onClick={onOpenDispute}
-            className="w-full flex items-center gap-4 px-6 py-4 text-left cursor-pointer hover:bg-[#fafafa] transition-colors"
-          >
-            <div className={`${COL.customer} flex items-center gap-2.5 min-w-0`}>
-              <div className="flex items-center justify-center w-7 h-7 rounded-full bg-gradient-to-b from-[#a9cbfb] to-[#6fa0f2] text-white text-[11px] font-semibold shrink-0">
-                {dispute.customer.initials}
+          {/* data rows */}
+          {visibleDisputes.map((dispute) => (
+            <button
+              key={dispute.id}
+              type="button"
+              onClick={() => onOpenDispute(dispute.id)}
+              className="w-full flex items-center gap-4 px-6 py-4 text-left cursor-pointer hover:bg-[#fafafa] transition-colors border-t border-[#ebebeb] first:border-t-0"
+            >
+              <div className={`${COL.customer} flex items-center gap-2.5 min-w-0`}>
+                <div className="flex items-center justify-center w-7 h-7 rounded-full bg-gradient-to-b from-[#a9cbfb] to-[#6fa0f2] text-white text-[11px] font-semibold shrink-0">
+                  {dispute.customer.initials}
+                </div>
+                <span className="text-[14px] font-medium text-[#1a1a1a] truncate">
+                  {dispute.customer.name}
+                </span>
               </div>
-              <span className="text-[14px] font-medium text-[#1a1a1a] truncate">
-                {dispute.customer.name}
-              </span>
-            </div>
-            <div className={`${COL.reason} text-[14px] text-[#1a1a1a] truncate`}>{dispute.reason}</div>
-            <div className={`${COL.amount} text-[14px] text-[#1a1a1a]`}>{dispute.amount}</div>
-            <div className={`${COL.date} text-[14px] text-[#1a1a1a]`}>{dispute.openedAt}</div>
-            <div className={`${COL.due} text-[14px] font-medium`} style={{ color: "#d5384b" }}>
-              {dispute.evidenceDueAt}
-            </div>
-            {showStatus && (
-              <div className={COL.status}>
-                <Badge variant="warning">Needs response</Badge>
+              <div className={`${COL.reason} text-[14px] text-[#1a1a1a] truncate`}>{dispute.reason}</div>
+              <div className={`${COL.amount} text-[14px] text-[#1a1a1a]`}>{dispute.amount}</div>
+              <div className={`${COL.date} text-[14px] text-[#1a1a1a]`}>{dispute.openedAt}</div>
+              <div
+                className={`${COL.due} text-[14px] font-medium`}
+                style={{ color: dispute.status === "Won" ? "#6b7280" : "#d5384b" }}
+              >
+                {dispute.evidenceDueAt}
               </div>
-            )}
-          </button>
+              {showStatus && (
+                <div className={COL.status}>
+                  <Badge variant={STATUS_VARIANT[dispute.status]}>{dispute.status}</Badge>
+                </div>
+              )}
+            </button>
+          ))}
         </div>
       ) : (
         <div className="content-card items-center justify-center mt-5" style={{ gap: 0 }}>

@@ -1,4 +1,5 @@
 import type { Chat, CreditsState, PageContext, SourceInfo, SuggestedCapability } from "./types";
+import { getDispute } from "./disputeData";
 
 /**
  * Hand-authored mock data for the chat/agent surfaces. No backend, no LLM, no MCP — see
@@ -56,24 +57,30 @@ export const DEFAULT_ENABLED_SOURCES = ["commas", "google-calendar", "zoom", "fa
 /**
  * Structured dispute context — attached whenever the agent panel opens from Dispute Detail
  * so the agent has the facts without a tool call or the seller copy/pasting anything
- * (PROTOTYPE_SPEC.md §2.11). Values mirror src/lib/disputeData.ts and the mock Commas MCP
- * server's DISPUTES record (server/mcp/mockCommasServer.ts) — kept in sync by hand.
+ * (PROTOTYPE_SPEC.md §2.11). Built from src/lib/disputeData.ts so all 5 demo cases (docs/
+ * active-context.md) get a correct context, not just the original Sarah Johnson case; the
+ * mock Commas MCP server's DISPUTES record (server/mcp/mockCommasServer.ts) mirrors the same
+ * ids/facts, kept in sync by hand.
  */
-export const DISPUTE_CONTEXT: PageContext = {
-  kind: "dispute",
-  id: "2481",
-  label: "Dispute #2481 — Sarah Johnson",
-  dispute: {
-    customerName: "Sarah Johnson",
-    customerEmail: "sarah.johnson@email.com",
-    transactionId: "txn_8b3f2a1c9d",
-    amountCents: 49900,
-    reason: "product_not_received",
-    openedAt: "2026-08-09T00:00:00Z",
-    evidenceDueAt: "2026-08-13T00:00:00Z",
-    evidenceStatus: "not_started",
-  },
-};
+export function buildDisputeContext(disputeId: string): PageContext {
+  const d = getDispute(disputeId);
+  if (!d) return { kind: "dispute", id: disputeId, label: `Dispute #${disputeId}` };
+  return {
+    kind: "dispute",
+    id: d.id,
+    label: `Dispute #${d.id} — ${d.customer.name}`,
+    dispute: {
+      customerName: d.customer.name,
+      customerEmail: d.customer.email,
+      transactionId: d.product.transactionId,
+      amountCents: Math.round(parseFloat(d.amount.replace(/[^0-9.]/g, "")) * 100),
+      reason: d.reasonCode,
+      openedAt: d.openedAt,
+      evidenceDueAt: d.evidenceDueAt,
+      evidenceStatus: d.evidenceStatus,
+    },
+  };
+}
 
 export const DASHBOARD_CONTEXT: PageContext = {
   kind: "dashboard",
@@ -81,10 +88,20 @@ export const DASHBOARD_CONTEXT: PageContext = {
   label: "Dashboard",
 };
 
+/** Prototype credit system (docs/active-context.md — "Chat Credit System"): a fresh workspace
+ * starts with 300 total credits, 0 used. */
 export const INITIAL_CREDITS: CreditsState = {
-  balance: 284,
-  startingBalance: 300,
+  totalCredits: 300,
+  usedCredits: 0,
 };
+
+export const LOW_CREDIT_THRESHOLD = 50;
+
+export const CREDIT_PACKAGES: { id: string; credits: number; price: string }[] = [
+  { id: "50", credits: 50, price: "$30" },
+  { id: "100", credits: 100, price: "$50" },
+  { id: "250", credits: 250, price: "$100" },
+];
 
 export const SUGGESTED_CAPABILITIES: SuggestedCapability[] = [
   { id: "sales-summary", label: "Summarize my sales", prompt: "Summarize my sales this month" },
@@ -117,23 +134,15 @@ export const DASHBOARD_SUGGESTED_CAPABILITIES: SuggestedCapability[] = [
   },
 ];
 
+/** Demo-script prompts for the Resolution Center chat (docs/active-context.md — "Resolution
+ * Center Demo-Readiness"), each answered deterministically against the currently selected
+ * dispute by server/llm/stubClient.ts. */
 export const DISPUTE_SUGGESTED_CAPABILITIES: SuggestedCapability[] = [
-  { id: "resolve", label: "Help me resolve this dispute", prompt: "Help me resolve this dispute" },
-  {
-    id: "draft-response",
-    label: "Draft an evidence response",
-    prompt: "Draft an evidence response for this dispute",
-  },
-  {
-    id: "customer-history",
-    label: "What's the customer's history?",
-    prompt: "What's this customer's history with us?",
-  },
-  {
-    id: "check-delivery",
-    label: "Check delivery across connected apps",
-    prompt: "Check delivery across connected apps",
-  },
+  { id: "why-open", label: "Why is this dispute open?", prompt: "Why is this dispute open?" },
+  { id: "evidence-needed", label: "What evidence do I need?", prompt: "What evidence do I need?" },
+  { id: "summarize-case", label: "Summarize this case", prompt: "Summarize this case" },
+  { id: "draft-response", label: "Draft my response", prompt: "Draft my response" },
+  { id: "next-step", label: "What should I do next?", prompt: "What should I do next?" },
 ];
 
 const now = Date.now();

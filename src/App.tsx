@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChatStoreProvider, useChatStore } from "./hooks/useChatStore";
 import type { PageContext, ViewId } from "./lib/types";
-import { DASHBOARD_CONTEXT, DISPUTE_CONTEXT } from "./lib/mockData";
+import { DASHBOARD_CONTEXT, buildDisputeContext } from "./lib/mockData";
 import { Sidebar } from "./components/shell/Sidebar";
 import { TopNav } from "./components/shell/TopNav";
 import { RightPanel } from "./components/chat/RightPanel";
@@ -23,6 +23,7 @@ function AppShell() {
 
   const [view, setView] = useState<ViewId>("dashboard");
   const [rcView, setRcView] = useState<"list" | "detail">("list");
+  const [selectedDisputeId, setSelectedDisputeId] = useState<string>("2481");
   const [chatPageActiveId, setChatPageActiveId] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelChatId, setPanelChatId] = useState<string | null>(null);
@@ -59,7 +60,7 @@ function AppShell() {
   /** Context for the floating button / panel, based on where the user currently is. */
   const currentContext: PageContext | undefined =
     view === "resolution-center" && rcView === "detail"
-      ? DISPUTE_CONTEXT
+      ? buildDisputeContext(selectedDisputeId)
       : view === "dashboard"
         ? DASHBOARD_CONTEXT
         : undefined;
@@ -80,10 +81,20 @@ function AppShell() {
             <div className="flex-1 min-w-0 flex flex-col">
               {view === "dashboard" && <DashboardPage />}
               {view === "resolution-center" && rcView === "list" && (
-                <ResolutionCenter onOpenDispute={() => setRcView("detail")} />
+                <ResolutionCenter
+                  onOpenDispute={(id) => {
+                    setSelectedDisputeId(id);
+                    setRcView("detail");
+                  }}
+                />
               )}
               {view === "resolution-center" && rcView === "detail" && (
-                <DisputeDetail onBack={() => setRcView("list")} onInvestigate={() => openPanel(DISPUTE_CONTEXT)} />
+                <DisputeDetail
+                  key={selectedDisputeId}
+                  disputeId={selectedDisputeId}
+                  onBack={() => setRcView("list")}
+                  onInvestigate={() => openPanel(buildDisputeContext(selectedDisputeId))}
+                />
               )}
               {view === "chat" && <ChatPage activeChatId={chatPageActiveId} onSelectChat={setChatPageActiveId} />}
             </div>
