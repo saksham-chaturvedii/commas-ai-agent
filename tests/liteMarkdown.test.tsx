@@ -22,6 +22,20 @@ describe("renderLiteMarkdown", () => {
     expect(list?.querySelectorAll("li")).toHaveLength(2);
   });
 
+  it("renders headings and lists correctly even when joined with SINGLE newlines — no literal ###", () => {
+    // Regression for PRODUCT_READINESS_AUDIT.md P0-1: the stub joined investigation sections
+    // with single \n, and the old block-based renderer showed "### Situation summary" as
+    // literal paragraph text.
+    const text = "### Situation summary\nDispute #2481 — $499.\n### What I found\n- **Gmail**: a thread\n- **Fathom**: 2 calls\n### Recommendation\nRespond with evidence.";
+    const { container } = render(<div>{renderLiteMarkdown(text)}</div>);
+    expect(container.textContent).not.toContain("###");
+    expect(screen.getByText("Situation summary").closest("h4")).not.toBeNull();
+    expect(screen.getByText("What I found").closest("h4")).not.toBeNull();
+    expect(screen.getByText("Recommendation").closest("h4")).not.toBeNull();
+    const list = screen.getByText(/a thread/).closest("ul");
+    expect(list?.querySelectorAll("li")).toHaveLength(2);
+  });
+
   it("renders the full flagship-style structure (heading, list, heading, paragraph)", () => {
     const text = [
       "### Case summary",

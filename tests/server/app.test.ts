@@ -36,6 +36,7 @@ describe("HTTP API", () => {
     expect(body.tools.map((t: { name: string }) => t.name).sort()).toEqual(
       [
         "commas_get_dispute",
+        "commas_list_disputes",
         "commas_mark_dispute_response_ready",
         "fanbasis_get_transaction",
         "fanbasis_list_customers",

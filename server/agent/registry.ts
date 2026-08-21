@@ -42,6 +42,11 @@ const KNOWN_TOOLS: Record<string, { classification: ToolClassification; progress
     progressLabel: "Checking dispute record…",
     displayName: "Dispute record",
   },
+  commas_list_disputes: {
+    classification: "read",
+    progressLabel: "Checking your disputes…",
+    displayName: "Disputes",
+  },
   commas_mark_dispute_response_ready: {
     classification: "write",
     progressLabel: "Marking the response ready…",
@@ -69,8 +74,8 @@ const KNOWN_TOOLS: Record<string, { classification: ToolClassification; progress
   },
   crm_get_contact: {
     classification: "read",
-    progressLabel: "Checking the CRM record…",
-    displayName: "CRM contact",
+    progressLabel: "Checking GoHighLevel…",
+    displayName: "GoHighLevel contact",
   },
 };
 

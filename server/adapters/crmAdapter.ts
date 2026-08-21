@@ -1,8 +1,10 @@
 import type { AdapterToolDef, SourceAdapter } from "./types.js";
 import { jsonResult } from "./types.js";
 
-/** API-style adapter — PROTOTYPE DATA ONLY, no real CRM/OAuth involved, deliberately
- * vendor-neutral (Commas' CPO named this as "your CRM", not a specific product). */
+/** API-style adapter for GoHighLevel (GHL) — PROTOTYPE DATA ONLY, no real GoHighLevel
+ * account or OAuth involved. The internal sourceId stays "crm" (renaming the id would ripple
+ * through persisted chats, tests, and the registry for zero user-visible benefit); every
+ * user-facing string says GoHighLevel. */
 
 interface MockContact {
   email: string;
@@ -30,7 +32,7 @@ export class CrmAdapter implements SourceAdapter {
     return [
       {
         name: "crm_get_contact",
-        description: "Look up a CRM contact record by email.",
+        description: "Look up a GoHighLevel contact record by email.",
         inputSchema: { type: "object", properties: { email: { type: "string" } }, required: ["email"] },
       },
     ];
@@ -40,7 +42,8 @@ export class CrmAdapter implements SourceAdapter {
     if (name !== "crm_get_contact") return { isError: true, data: `Unknown tool: ${name}`, rawText: `Unknown tool: ${name}` };
     const email = typeof args.email === "string" ? args.email.toLowerCase() : undefined;
     const contact = CONTACTS.find((c) => c.email.toLowerCase() === email);
-    if (!contact) return { isError: true, data: `No CRM contact found for ${email}`, rawText: `No CRM contact found for ${email}` };
-    return jsonResult({ contact });
+    // A missing contact is a normal empty result, not a connector failure — returning isError
+    // here made the UI imply GoHighLevel itself was broken (audit §11.2).
+    return jsonResult({ contact: contact ?? null });
   }
 }

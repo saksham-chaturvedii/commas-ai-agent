@@ -147,8 +147,8 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       const usedSources = new Set(result.steps.map((s) => s.sourceId));
       expect(usedSources).toEqual(new Set(["commas", "crm", "gmail", "fathom", "zoom"]));
       expect(result.answer).toContain("Situation summary");
-      expect(result.answer).toContain("Evidence");
-      expect(result.answer.toLowerCase()).toContain("crm");
+      expect(result.answer).toContain("What I found");
+      expect(result.answer.toLowerCase()).toContain("gohighlevel");
       expect(result.answer.toLowerCase()).toContain("fathom");
     });
 
@@ -166,7 +166,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       const usedSources = new Set(result.steps.map((s) => s.sourceId));
       expect(usedSources).toEqual(new Set(["commas", "fathom"]));
       expect(result.answer).toContain("Missing information");
-      expect(result.answer).toContain("CRM");
+      expect(result.answer).toContain("GoHighLevel");
       expect(result.answer).toContain("Gmail");
       expect(result.answer).toContain("Zoom");
     });
@@ -295,6 +295,129 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       expect(followUp.steps[0]?.sourceId).toBe("commas");
       expect(followUp.answer.toLowerCase()).toContain("transaction");
       expect(followUp.answer).not.toMatch(/no transactions/i);
+    });
+  });
+
+  describe("answer quality regressions (PRODUCT_READINESS_AUDIT.md P0s)", () => {
+    const KIM_CONTEXT: PageContext = {
+      kind: "dispute",
+      id: "2455",
+      label: "Dispute #2455 — David Kim",
+      dispute: {
+        customerName: "David Kim",
+        customerEmail: "david.kim@email.com",
+        transactionId: "txn_3f7b90c114",
+        amountCents: 24900,
+        reason: "product_not_received",
+        openedAt: "August 17, 2026",
+        evidenceDueAt: "August 24, 2026",
+        evidenceStatus: "in_progress",
+      },
+    };
+
+    it("P0-3: investigating the uncertain case (#2455) reflects ITS story — uncertainty, not Sarah's engagement narrative", async () => {
+      const result = await runAgentTurn({
+        prompt: "Investigate this dispute",
+        enabledSources: [...ALL_SOURCES],
+        context: KIM_CONTEXT,
+        conversationHistory: [],
+        llmClient,
+        adapters,
+        registry,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.answer).not.toContain("engaged with the product after purchase");
+      expect(result.answer.toLowerCase()).toContain("wouldn't commit to");
+      // empty external results are reported honestly, never as "wasn't checked"
+      expect(result.answer).not.toContain("no connected apps were available");
+      expect(result.answer.toLowerCase()).toContain("no email threads found");
+    });
+
+    it("P0-4: the cross-apps prompt in a GLOBAL chat never gets hijacked into a dispute investigation", async () => {
+      const result = await runAgentTurn({
+        prompt: "Find information across my connected apps",
+        enabledSources: [...ALL_SOURCES],
+        conversationHistory: [],
+        llmClient,
+        adapters,
+        registry,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.steps.map((s) => s.id).join()).not.toContain("commas_get_dispute");
+      expect(result.answer).not.toContain("Situation summary");
+      expect(result.answer.toLowerCase()).toContain("fathom");
+      expect(result.answer.toLowerCase()).toContain("gohighlevel");
+    });
+
+    it("P0-2: the global sales summary matches the Dashboard's numbers ($18,420 / 62 transactions)", async () => {
+      const result = await runAgentTurn({
+        prompt: "Summarize my sales this month",
+        enabledSources: ["commas"],
+        conversationHistory: [],
+        llmClient,
+        adapters,
+        registry,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.answer).toContain("$18,420");
+      expect(result.answer).toContain("62 transactions");
+      expect(result.answer).not.toContain("$2125");
+    });
+
+    it("P0-2: 'Analyze my disputes' in a global chat gives the 4-dispute portfolio, not a #2481 deep-dive", async () => {
+      const result = await runAgentTurn({
+        prompt: "Analyze my disputes",
+        enabledSources: [...ALL_SOURCES],
+        conversationHistory: [],
+        llmClient,
+        adapters,
+        registry,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.answer).toContain("4 open disputes");
+      expect(result.answer).toContain("#2502");
+      expect(result.answer).not.toContain("Situation summary");
+    });
+
+    it("P0-6: unmatched prompts never confess to being a preview/demo", async () => {
+      const result = await runAgentTurn({
+        prompt: "what's the weather like on the moon",
+        enabledSources: [...ALL_SOURCES],
+        conversationHistory: [],
+        llmClient,
+        adapters,
+        registry,
+      });
+      expect(result.answer).not.toContain("This preview only knows");
+      expect(result.answer.toLowerCase()).not.toContain("demo scenario");
+      expect(result.answer).toContain("Summarize my sales");
+    });
+
+    it("P0-7: 'Help me respond to a customer' asks WHO, listing recent customers", async () => {
+      const result = await runAgentTurn({
+        prompt: "Help me respond to a customer",
+        enabledSources: ["commas"],
+        conversationHistory: [],
+        llmClient,
+        adapters,
+        registry,
+      });
+      expect(result.answer).toContain("Who do you mean?");
+      expect(result.answer).toContain("Sarah Johnson");
+      expect(result.answer).toContain("Marcus Webb");
+    });
+
+    it("acknowledgments get an in-character reply, not the capability pitch", async () => {
+      const result = await runAgentTurn({
+        prompt: "thanks!",
+        enabledSources: ["commas"],
+        conversationHistory: [],
+        llmClient,
+        adapters,
+        registry,
+      });
+      expect(result.answer).toContain("Anytime");
+      expect(result.steps).toHaveLength(0);
     });
   });
 });

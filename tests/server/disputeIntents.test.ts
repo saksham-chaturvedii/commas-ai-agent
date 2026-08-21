@@ -68,7 +68,7 @@ describe("dispute-intent demo questions (deterministic, per-case)", () => {
     });
     it("summarize: produces a short case overview", async () => {
       const r = await ask("Summarize this case", "2481");
-      expect(r.answer).toContain("$499.00");
+      expect(r.answer).toContain("$499");
       expect(r.answer).toContain("Sarah Johnson");
     });
   });

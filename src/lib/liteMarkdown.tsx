@@ -1,46 +1,79 @@
 import type { ReactNode } from "react";
 
 /**
- * Minimal renderer for the mock engine's canned answers: **bold** spans, blank-line-separated
- * blocks, `### Heading` blocks, and `- item` bullet lists. Not a general markdown parser —
- * deliberately tiny for this UI-only pass, extended just enough to render the flagship dispute
- * investigation's structured output (case summary / timeline / evidence / draft).
+ * Minimal renderer for the stub agent's answers: **bold** spans, `### Heading` lines, and
+ * `- item` bullet lists. Not a general markdown parser — deliberately tiny.
+ *
+ * Segments the text LINE-WISE rather than by blank-line blocks: a `### ` heading or a `- `
+ * list run is recognized wherever it appears, whether separated by `\n` or `\n\n`. The old
+ * block-only version silently rendered `### Situation summary` as literal paragraph text
+ * whenever an answer joined its lines with single newlines (PRODUCT_READINESS_AUDIT.md P0-1)
+ * — segmenting by line shape makes the renderer robust to either join style.
  */
+
+type Segment = { kind: "heading"; text: string } | { kind: "list"; items: string[] } | { kind: "para"; text: string };
+
+function segment(text: string): Segment[] {
+  const segments: Segment[] = [];
+  let para: string[] = [];
+
+  const flushPara = () => {
+    if (para.length > 0) {
+      segments.push({ kind: "para", text: para.join(" ") });
+      para = [];
+    }
+  };
+
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (line.length === 0) {
+      flushPara();
+    } else if (line.startsWith("### ")) {
+      flushPara();
+      segments.push({ kind: "heading", text: line.slice(4) });
+    } else if (line.startsWith("- ")) {
+      flushPara();
+      const last = segments[segments.length - 1];
+      if (last?.kind === "list") last.items.push(line.slice(2));
+      else segments.push({ kind: "list", items: [line.slice(2)] });
+    } else {
+      para.push(line);
+    }
+  }
+  flushPara();
+  return segments;
+}
+
 export function renderLiteMarkdown(text: string): ReactNode {
-  const blocks = text.split(/\n\n+/);
+  const segments = segment(text);
   return (
     <>
-      {blocks.map((block, bi) => {
-        const lines = block.split("\n").filter((l) => l.length > 0);
-        const spacing = bi > 0 ? "mt-2.5" : undefined;
-
-        if (lines.length === 1 && lines[0].startsWith("### ")) {
+      {segments.map((seg, i) => {
+        if (seg.kind === "heading") {
           return (
             <h4
-              key={bi}
+              key={i}
               className={
                 "text-[11px] font-semibold uppercase tracking-wide text-[var(--color-text-quaternary)]" +
-                (bi > 0 ? " mt-3" : "")
+                (i > 0 ? " mt-3" : "")
               }
             >
-              {renderInline(lines[0].slice(4))}
+              {renderInline(seg.text)}
             </h4>
           );
         }
-
-        if (lines.length > 0 && lines.every((l) => l.trim().startsWith("- "))) {
+        if (seg.kind === "list") {
           return (
-            <ul key={bi} className={"list-disc pl-5 flex flex-col gap-1" + (bi > 0 ? " mt-2" : "")}>
-              {lines.map((line, li) => (
-                <li key={li}>{renderInline(line.trim().slice(2))}</li>
+            <ul key={i} className={"list-disc pl-5 flex flex-col gap-1" + (i > 0 ? " mt-2" : "")}>
+              {seg.items.map((item, li) => (
+                <li key={li}>{renderInline(item)}</li>
               ))}
             </ul>
           );
         }
-
         return (
-          <p key={bi} className={spacing}>
-            {renderInline(block)}
+          <p key={i} className={i > 0 ? "mt-2.5" : undefined}>
+            {renderInline(seg.text)}
           </p>
         );
       })}

@@ -57,6 +57,7 @@ describe("buildToolRegistry (tool discovery across all adapters)", () => {
         "fanbasis_list_transactions",
         "fanbasis_get_transaction",
         "commas_get_dispute",
+        "commas_list_disputes",
         "commas_mark_dispute_response_ready",
         "fathom_search_calls",
         "zoom_list_meetings",

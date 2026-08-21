@@ -14,6 +14,7 @@ describe("CommasMcpClient — mock mode (real MCP protocol, in-process transport
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
         "commas_get_dispute",
+        "commas_list_disputes",
         "commas_mark_dispute_response_ready",
         "fanbasis_get_transaction",
         "fanbasis_list_customers",
