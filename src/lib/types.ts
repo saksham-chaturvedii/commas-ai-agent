@@ -8,7 +8,8 @@ export type ViewId = "dashboard" | "resolution-center" | "chat";
 
 /**
  * One native source (Commas) plus the external connected sources named by Commas' CPO for
- * off-platform fulfillment: Google Calendar, Zoom, Fathom, Gmail, CRM (vendor-neutral).
+ * off-platform fulfillment: Google Calendar, Zoom, Fathom, Gmail, GoHighLevel. Internal id
+ * stays "crm" (see SOURCES in mockData.ts for the user-facing "GoHighLevel" name/icon).
  * Do not add integrations beyond this list.
  */
 export type SourceId = "commas" | "google-calendar" | "zoom" | "fathom" | "gmail" | "crm";

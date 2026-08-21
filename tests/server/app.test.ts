@@ -25,7 +25,7 @@ describe("HTTP API", () => {
     expect(new Set(body.sources.map((s: { sourceId: string }) => s.sourceId))).toEqual(
       new Set(["commas", "fathom", "zoom", "gmail", "google-calendar", "crm"]),
     );
-    // Commas/Fathom/Zoom are MCP-backed, Gmail/Calendar/CRM are API-backed (docs/active-context.md)
+    // Commas/Fathom/Zoom are MCP-backed, Gmail/Calendar/GoHighLevel are API-backed (docs/active-context.md)
     expect(body.sources.find((s: { sourceId: string }) => s.sourceId === "commas").kind).toBe("mcp");
     expect(body.sources.find((s: { sourceId: string }) => s.sourceId === "gmail").kind).toBe("api");
   });
@@ -114,7 +114,7 @@ describe("HTTP API", () => {
         amountCents: 49900,
         reason: "product_not_received",
         openedAt: "2026-08-09T00:00:00Z",
-        evidenceDueAt: "2026-08-13T00:00:00Z",
+        evidenceDueAt: "2026-08-23T00:00:00Z",
         evidenceStatus: "not_started",
       },
     };

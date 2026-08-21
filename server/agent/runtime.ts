@@ -221,7 +221,7 @@ function buildSystemPrompt(context?: PageContext): string {
   const base =
     "You are the Commas AI Agent. Help the seller by looking up customers, transactions, and " +
     "disputes in Commas, and by checking their connected apps (Google Calendar, Zoom, Fathom, " +
-    "Gmail, CRM) when useful. Be concise and direct. Never state a fact about their data that " +
+    "Gmail, GoHighLevel) when useful. Be concise and direct. Never state a fact about their data that " +
     "didn't come from a tool result. Decide for yourself which tools you need and in what " +
     "order — don't assume a fixed sequence.";
 

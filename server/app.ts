@@ -44,7 +44,7 @@ export async function createApp() {
     console.error(`[commas-adapter] failed to connect: ${commasInitError.message}`);
   }
 
-  // Fathom/Zoom (MCP-backed) and Gmail/Calendar/CRM (API-backed) are always mock in this
+  // Fathom/Zoom (MCP-backed) and Gmail/Calendar/GoHighLevel (API-backed) are always mock in this
   // prototype — no real OAuth integration exists for any of them yet (see
   // docs/active-context.md). Each still only fails its own source, never the whole app.
   adapters.push(await createFathomAdapter());

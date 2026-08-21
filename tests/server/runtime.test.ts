@@ -35,7 +35,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       amountCents: 49900,
       reason: "product_not_received",
       openedAt: "2026-08-09T00:00:00Z",
-      evidenceDueAt: "2026-08-13T00:00:00Z",
+      evidenceDueAt: "2026-08-23T00:00:00Z",
       evidenceStatus: "not_started",
     },
   };
@@ -310,7 +310,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         amountCents: 24900,
         reason: "product_not_received",
         openedAt: "August 17, 2026",
-        evidenceDueAt: "August 24, 2026",
+        evidenceDueAt: "August 31, 2026",
         evidenceStatus: "in_progress",
       },
     };

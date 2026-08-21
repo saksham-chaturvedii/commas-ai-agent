@@ -206,7 +206,7 @@ export const SEED_CHATS: Chat[] = [
           "This month you've done **$18,420** across 62 transactions — up 12% from last month. " +
           "**Pro Coaching Program** is your top seller ($9,800), followed by **1:1 Strategy Call** " +
           "($4,250). 3 refunds totaling $960 were issued, and 4 disputes are currently open — " +
-          "**#2481** is the most urgent (evidence due August 13).",
+          "**#2481** is the most urgent (evidence due August 23).",
         ts: hoursAgo(3),
         toolSummary: [
           { sourceId: "commas", label: "Transactions", ok: true },

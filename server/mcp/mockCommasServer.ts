@@ -156,7 +156,7 @@ const DISPUTES: MockDispute[] = [
     customerEmail: "sarah.johnson@email.com",
     productName: "Pro Coaching Program",
     openedAt: "2026-08-09T00:00:00Z",
-    evidenceDueAt: "2026-08-13T00:00:00Z",
+    evidenceDueAt: "2026-08-23T00:00:00Z",
     responseStatus: "not_started",
     scenario: "needs_response",
     likelyReason:
@@ -187,7 +187,7 @@ const DISPUTES: MockDispute[] = [
     customerEmail: "marcus.webb@email.com",
     productName: "1:1 Strategy Call",
     openedAt: "2026-08-15T00:00:00Z",
-    evidenceDueAt: "2026-08-22T00:00:00Z",
+    evidenceDueAt: "2026-08-29T00:00:00Z",
     responseStatus: "not_started",
     scenario: "missing_evidence",
     likelyReason:
@@ -253,7 +253,7 @@ const DISPUTES: MockDispute[] = [
     customerEmail: "david.kim@email.com",
     productName: "Growth Accelerator Course",
     openedAt: "2026-08-17T00:00:00Z",
-    evidenceDueAt: "2026-08-24T00:00:00Z",
+    evidenceDueAt: "2026-08-31T00:00:00Z",
     responseStatus: "not_started",
     scenario: "high_risk",
     likelyReason:
@@ -290,7 +290,7 @@ const DISPUTES: MockDispute[] = [
     customerEmail: "priya.nair@email.com",
     productName: "Pro Coaching Program",
     openedAt: "2026-08-03T00:00:00Z",
-    evidenceDueAt: "2026-08-07T00:00:00Z",
+    evidenceDueAt: "2026-08-17T00:00:00Z",
     responseStatus: "ready",
     scenario: "resolved",
     likelyReason:

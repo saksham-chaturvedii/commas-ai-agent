@@ -139,6 +139,11 @@ interface ChatStoreValue {
   /** Dev/demo-only: jump straight to a given remaining balance without sending N messages.
    * Not surfaced as a normal user-facing action — see AddCreditsModal's "Demo tools" footer. */
   setRemainingCreditsForDemo: (remaining: number) => void;
+  /** Dev/demo-only: wipes every write action taken during this session — chats, credits
+   * spent, sources connected/disconnected, mark-ready flags — back to the seed defaults.
+   * Does NOT reload the page: evidence added via "Add evidence" lives in App.tsx's own
+   * state, not here, so the caller (AddCreditsModal) reloads after calling this so that
+   * state resets too — see its "Demo tools" footer. */
   resetDemo: () => void;
 }
 
@@ -507,6 +512,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     setRunSteps([]);
     setVisibleStepIds([]);
     setPendingApproval(null);
+    setMarkedReadyDisputeIds([]);
     persist({ chats: SEED_CHATS, sources: SOURCES, credits: INITIAL_CREDITS });
   }, [clearTimers]);
 

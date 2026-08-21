@@ -9,7 +9,7 @@ import type { SourceId } from "../types.js";
  *
  * - "mcp": backed by a real MCP client/server pair (Commas, Fathom, Zoom — see
  *   server/adapters/commasAdapter.ts, meetingsAdapter.ts).
- * - "api": backed by a direct API-shaped call, no MCP involved (Gmail, Google Calendar, CRM —
+ * - "api": backed by a direct API-shaped call, no MCP involved (Gmail, Google Calendar, GoHighLevel —
  *   see server/adapters/gmailAdapter.ts etc.) — these sources have no documented MCP surface,
  *   so forcing them through MCP would be inventing a capability that isn't established.
  */

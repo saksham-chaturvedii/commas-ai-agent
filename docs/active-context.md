@@ -1590,6 +1590,67 @@ The fix is scoped entirely to the dispute-context path (`RightPanel`, `EmptyStat
 `ChatWorkspace`'s dispute branch, `DISPUTE_SUGGESTED_CAPABILITIES`) plus the one shared-store
 bug in `createChat()` that affected correctness regardless of UI surface.
 
+# Post-Audit Fixes: Due Dates, GoHighLevel Naming, Demo Reset (2026-08-21)
+
+Three small, user-flagged fixes made after the audit implementation pass above.
+
+## Evidence due date = 14 days from dispute date
+
+The seller flagged (via screenshot of the Resolution Center list) that "Evidence due by"
+dates weren't a consistent 14 days after each dispute's `openedAt` — leftover from earlier
+demo-data edits across sessions. Recomputed all 5 cases in `src/lib/disputeData.ts` and its
+backend mirror `server/mcp/mockCommasServer.ts` (`DISPUTES` array, ISO dates):
+
+| Case | Opened | Evidence due (was → now) |
+|---|---|---|
+| #2481 Sarah Johnson | Aug 9 | Aug 13 → **Aug 23** |
+| #2502 Marcus Webb | Aug 15 | Aug 22 → **Aug 29** |
+| #2417 Elena Cruz | Aug 11 | Aug 25 (already correct) |
+| #2455 David Kim | Aug 17 | Aug 24 → **Aug 31** |
+| #2390 Priya Nair (resolved) | Aug 3 | Aug 7 → **Aug 17** |
+
+`evidenceDueLabel` strings (`"Due in N days"`) were recomputed against the app's implicit
+"today" of August 21, 2026 (consistent with the 3 labels that were already correct — #2502/
+#2417/#2455 all implied today = Aug 21 before this fix; only #2481's label was stale).
+Updated the one seed-chat mention of #2481's due date in `src/lib/mockData.ts`, and the
+hardcoded due-date strings in `tests/server/app.test.ts` / `tests/server/runtime.test.ts` that
+feed a manually-constructed dispute context (values only need to be well-formed for those
+tests, but kept them consistent for readability). 94/94 tests still pass.
+
+## Remaining "CRM" references renamed to GoHighLevel
+
+The audit pass (Phase 3 above) already renamed CRM → GoHighLevel in every user-facing surface
+and most code comments; a few were missed: the LLM system prompt in
+`server/agent/runtime.ts` (`buildSystemPrompt` — this text can appear in real-LLM-mode
+reasoning, not just the stub), and doc comments in `src/lib/types.ts`, `server/app.ts`,
+`server/adapters/types.ts`, `tests/server/app.test.ts`. The internal `SourceId` value stays
+`"crm"` (identifier, not user-facing) — only prose mentions were renamed.
+
+## Reset demo data button
+
+The seller's workflow during a live demo: use the credit modal's existing "Demo tools" (Set
+remaining: 50/10/1/0) to show the low/exhausted-credit UI states, then need to get back to a
+clean slate to demo chat normally — previously the only way was clearing localStorage by hand.
+Added a "Reset all demo data" button to `AddCreditsModal.tsx`'s existing Demo Tools footer
+(same section, same audience — dev/demo-only, not a production affordance). It calls the
+`resetDemo()` action that already existed on `useChatStore` (chats/sources/credits back to
+seed) but was never wired to any UI, then force-reloads the page — the reload is needed
+because evidence added via "Add evidence" lives in `App.tsx`'s own `evidenceByDispute` state,
+not the chat store, and isn't persisted to localStorage in the first place (it's reseeded from
+`DISPUTES[].seedEvidenceItems` on every load), so a reload resets it for free. Also fixed
+`resetDemo()` itself to clear `markedReadyDisputeIds` (previously missed — a mark-ready badge
+from a prior demo run would have survived a reset). The credit pill (`CreditIndicator`) that
+opens this modal is clickable at any balance, including 0, so it's reachable from the exact
+"credits exhausted" state the seller described wanting to escape.
+
+## Verification
+
+Playwright, fresh localStorage: all 4 open disputes' Resolution Center rows show the corrected
+dates (Aug 23/29/25/31); Sarah's detail page shows "August 23, 2026 (Due in 2 days)"; the
+dispute chat's Sources menu shows "GoHighLevel" with no bare "CRM" anywhere on the page;
+draining credits to 0/300 via the demo buttons then clicking "Reset all demo data" restores
+300/300 credits after reload. `npx tsc -b`, `npx vitest run` (94/94) both clean.
+
 # Current Repository State
 
 - `docs/` — full spec set (`PROTOTYPE_SPEC.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,

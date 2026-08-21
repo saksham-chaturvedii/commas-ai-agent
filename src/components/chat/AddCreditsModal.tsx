@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, Sparkles, Check } from "lucide-react";
+import { X, Sparkles, Check, RotateCcw } from "lucide-react";
 import { useChatStore } from "../../hooks/useChatStore";
 import { CREDIT_PACKAGES } from "../../lib/mockData";
 
@@ -19,7 +19,7 @@ export function AddCreditsModal({
   onClose: () => void;
   onPurchased?: (amount: number) => void;
 }) {
-  const { addCredits, setRemainingCreditsForDemo, credits } = useChatStore();
+  const { addCredits, setRemainingCreditsForDemo, resetDemo, credits } = useChatStore();
   const [selected, setSelected] = useState(CREDIT_PACKAGES[0].id);
 
   const pkg = CREDIT_PACKAGES.find((p) => p.id === selected)!;
@@ -28,6 +28,14 @@ export function AddCreditsModal({
     addCredits(pkg.credits);
     onPurchased?.(pkg.credits);
     onClose();
+  };
+
+  // Wipes chats/credits/sources back to seed, then reloads so evidence added via "Add
+  // evidence" (App.tsx-local state, not covered by resetDemo) resets too — lets the seller
+  // restart a demo mid-walkthrough without losing the whole browser tab.
+  const handleReset = () => {
+    resetDemo();
+    window.location.reload();
   };
 
   return (
@@ -128,6 +136,14 @@ export function AddCreditsModal({
               ({Math.max(0, credits.totalCredits - credits.usedCredits)}/{credits.totalCredits} now)
             </span>
           </div>
+          <button
+            type="button"
+            onClick={handleReset}
+            className="mt-2.5 flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[11.5px] font-medium text-[var(--color-text-label)] bg-[var(--color-app-bg)] hover:bg-black/[0.06]"
+          >
+            <RotateCcw size={12} strokeWidth={2} />
+            Reset all demo data
+          </button>
         </div>
       </div>
     </div>
