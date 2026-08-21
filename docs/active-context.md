@@ -1,6 +1,15 @@
 # Commas AI Agent — Active Context
 
-**Last updated:** 2026-08-21 · **Updated by:** Claude (Resolved-dispute read-only + Dispute AI session identity)
+**Last updated:** 2026-08-21 · **Updated by:** Claude (Audit implementation pass — P0/P1 + GoHighLevel branding)
+
+> **The PRODUCT_READINESS_AUDIT.md P0/P1 recommendations are implemented** (see "Audit
+> Implementation Pass" below): all 8 P0 answer-quality/rendering defects fixed, Phase-2 state
+> hygiene (stale panels, busy-guard, interrupted-run reconciliation, product-voice errors,
+> v2 storage key), Phase-3 story completeness (Elena/David seed evidence, communications
+> intent, mark-ready badge, context-chat history row), plus the connected-apps requirement:
+> recognizable brand-colored icons and CRM → **GoHighLevel** everywhere user-facing. 94/94
+> tests pass; a 20-check live browser walkthrough of the 12 required flows passed with zero
+> console errors. Deliberately skipped audit items are recorded at the end of that section.
 
 > **Resolved disputes are now strictly read-only, and a real bug in the dispute AI panel's
 > session handling is fixed.** See "Resolved Disputes Are Read-Only" and "Dispute AI Session
@@ -1336,6 +1345,107 @@ fake timers).
   as a thumbnail (which would just fail to render) — full content-sniffing validation is out
   of scope for a client-side mock.
 
+# Audit Implementation Pass (2026-08-21)
+
+Executed `PRODUCT_READINESS_AUDIT.md`'s roadmap (Phases 1–3) plus a new connected-apps
+branding requirement, in three phase-sized commits. Everything below was verified live in the
+browser (20-check Playwright walkthrough covering the 12 flows the task listed, zero console
+errors, screenshots in job scratch space) on top of 94/94 automated tests.
+
+## Phase 1 — answer quality & rendering (all 8 P0s)
+
+- **P0-1**: `liteMarkdown.tsx` rewritten to segment line-wise — `###` headings and `-` lists
+  render correctly whether joined by `\n` or `\n\n`; the flagship investigation answer no
+  longer shows literal `###` markup. The stub keeps single-`\n` joins; the renderer is now
+  robust to both (belt-and-suspenders was judged unnecessary once the renderer handles it).
+- **P0-2/P0-5**: unfiltered `fanbasis_list_transactions` returns a `MONTH_SUMMARY` rollup
+  ($18,420 / 62 transactions / top products / LAUNCH20 / 3 refunds / 4 open disputes worth
+  $1,776) so "Summarize my sales" and the Dashboard's revenue chip produce a structured
+  narrative that matches the Dashboard by construction. The dashboard chip was reworded to
+  "What's driving my revenue this month?" — the old "why did revenue drop" contradicted the
+  +12% the page itself shows.
+- **P0-2/§8.1**: new prototype-only `commas_list_disputes` tool; "Analyze my disputes" in a
+  global chat now yields the real 4-dispute portfolio (sorted by due date, resolved case
+  noted) instead of a #2481 deep-dive. Dashboard "Disputed payments" card and the seed sales
+  chat updated to the same 4-disputes/$1,776 story.
+- **P0-3/P0-8**: `synthesizeDisputeInvestigation` grounds its "My read"/"Recommendation" in
+  the specific dispute's authored fields (uncertainty preserved for David Kim, resolution for
+  Priya), and reports each checked source honestly — empty results say "no email threads
+  found", never "no connected apps were available" under a "Checked 5 sources" receipt.
+- **P0-4**: cross-apps prompts keep their own flow (checked before the dispute chain; chain
+  continuation now requires `commas_get_dispute` in this turn's history) and end in a
+  per-source synthesis (P1-2) instead of a bare count.
+- **P0-6**: fallback rewritten in product voice (never "preview"/"demo"); acknowledgments
+  ("thanks", "ok") get an in-character reply.
+- **P0-7**: "Help me respond to a customer" asks *who*, listing recent customers; the named
+  follow-up routes through the existing lookup branch.
+
+## Phase 2 — context & state hygiene
+
+- **P1-1**: the AI panel closes on any page navigation (sidebar, RC list↔detail) — no more
+  "Dispute #2481" panel floating over the Dashboard as if current.
+- **P1-3**: context-less panel opens (RC-list floating button) create/reuse a general chat
+  instead of resurfacing the last contextual one.
+- **P1-4**: agent-unreachable copy is product-voice ("temporarily unreachable") — the
+  "npm run dev:server" text is gone from both error paths.
+- **P1-5/P1-6**: suggestion chips render disabled at 0 credits or while another chat's run is
+  in flight, and `sendMessage` itself refuses a second concurrent run (chips bypassed the
+  composer's disabled state and could strand the first chat in "running" forever).
+- **P1-8**: chats persisted mid-run reconcile to `idle` on load with a "response was
+  interrupted" note.
+- **P2-10**: storage key bumped to `commas-ai-agent:v2` so stale rehearsal stores don't serve
+  the old contradictory seed copy.
+
+## Phase 3 — story completeness + GoHighLevel branding
+
+- **Connected apps requirement**: `SourceIcon.tsx` now renders hand-drawn, brand-colored
+  simplified marks for Google Calendar (blue "31" tile), Zoom (blue camera squircle), Fathom
+  (violet waveform), Gmail (multicolor M envelope), and GoHighLevel (navy double-chevron) —
+  shared 24×24 viewBox, consistent at every size the app uses. **CRM → GoHighLevel** in every
+  user-facing string (sources menu, connected-apps modal, agent answers, progress labels,
+  Missing-information lists); the internal `SourceId` stays `"crm"` deliberately — renaming
+  the id would ripple through persisted chats/tests for zero visible benefit.
+- **P1-7**: Elena Cruz (#2417) ships 3 inspectable seed evidence items (two duplicate-charge
+  receipts on one item, checkout retry log, her own support email); David Kim (#2455) gets
+  exactly one sparse receipt, matching his inconclusive story.
+- **P1-9**: new "communications" dispute intent — fetches the dispute, pulls live Gmail
+  threads when the source is enabled (says so plainly when it isn't), and answers from a new
+  per-case `communicationsSummary` field authored for all 5 disputes.
+- **P1-10**: an approved "mark response ready" write action now shows a "Marked ready by AI"
+  success badge on the dispute's response card (`markedReadyDisputeIds` in the chat store,
+  set only on a successful approved execution; session-only, mirroring the backend's
+  in-memory flag).
+- **P1-11**: a dispute chat opened "in full Chat view" gets a highlighted, gavel-marked row
+  in the history list instead of existing nowhere.
+- **§11.2/§11.3**: a missing GoHighLevel contact is an honest empty result (was a connector
+  error); naming a disconnected source gets a specific "turn it on in Sources" reply.
+
+## Audit recommendations deliberately NOT implemented (and why)
+
+- **Phase 4 / P2 items** (P2-1 D/W/M/Y data, P2-2 announcement carousel, P2-3 RC search,
+  P2-4 live context rebuild, P2-5 agent-sees-uploaded-evidence, P2-6 dispute composer
+  placeholder, P2-7 panel width, P2-8 history timestamps, P2-9 connect confirmation line,
+  P2-11 approved-line cosmetic): the audit itself gates Phase 4 behind "only after everything
+  else is done and verified" and the task said not to overbuild — P0/P1 exhausted the
+  materially-demo-improving set. All remain open, documented, and small.
+- **Everything in audit §6 "Do Not Build"** (real OAuth/MCP/LLM wiring, router, backend
+  persistence, SSE, connector failure simulations, new dispute statuses, message
+  edit/regenerate): explicitly out of scope, unchanged.
+- **Audit's suggested `\n\n` re-join in the stub (half of P0-1)**: skipped as redundant once
+  the renderer handles single-`\n` input — one robust fix beats two coupled ones.
+
+## Verification
+
+- `npx tsc -b`, `npm run lint`, `npm run build` — clean. **94/94 tests** (was 82: +8 P0
+  regression tests incl. the required liteMarkdown/#2455/cross-apps/$18,420/no-"preview"
+  assertions, +2 busy-guard & interrupted-run tests, +2 communications-intent tests).
+- Live 20-check walkthrough of the task's 12 flows: global chat (sales narrative matches
+  Dashboard, portfolio answer, in-character fallback), history + deletion, dispute AI with
+  context header and 7 chips, investigation rendering with real headings and honest findings,
+  mark-ready → visible badge, panel closing on navigation, dashboard revenue narrative,
+  GoHighLevel branding in menu/modal, communications intent, resolved read-only, Elena's
+  seeded evidence, credit pill consistency across surfaces. Zero console errors.
+
 # Resolved Disputes Are Read-Only (2026-08-21)
 
 Previously, `DisputeDetail.tsx` showed the same editable checklist/response UI regardless of
@@ -1493,7 +1603,7 @@ bug in `createChat()` that affected correctness regardless of UI surface.
   agent runtime, MCP client, and mock Commas MCP server — see "Commas Tool Layer" above for
   the full file list. `npm run dev:all` runs both together (or `dev` + `dev:server`
   separately); Vite proxies `/api` to the backend.
-- `tests/` — **82 Vitest tests passing**: frontend (`liteMarkdown`, `Sidebar`, `ChatFlow`,
+- `tests/` — **94 Vitest tests passing**: frontend (`liteMarkdown`, `Sidebar`, `ChatFlow`,
   `CreditSystem`, `EvidenceUpload`, `DisputeChatSession` — mocks `fetch` at the network
   boundary, covers multi-turn history, the approval flow, persistence, all 6 credit scenarios
   A–F, the evidence upload/validation pipeline, and dispute chat-session identity/delete
@@ -1595,6 +1705,12 @@ bug in `createChat()` that affected correctness regardless of UI surface.
   mapped to real stub behavior). See "Resolved Disputes Are Read-Only" and "Dispute AI Session
   Identity" above. Verified: typecheck/lint/build clean, 82 tests (+3 net), and a live
   walkthrough of every case both tasks specified, zero console errors.
+- **Audit implementation pass** (2026-08-21) — executed PRODUCT_READINESS_AUDIT.md Phases 1–3
+  (all 8 P0s, the selected P1s, connector items) plus the connected-apps branding requirement
+  (brand-colored icons, CRM → GoHighLevel) in three phase-sized commits — see "Audit
+  Implementation Pass" above, including the deliberately-skipped items. Verified:
+  typecheck/lint/build clean, 94 tests (+12 net), 20-check live walkthrough of the 12
+  required flows, zero console errors.
 
 # In Progress
 
