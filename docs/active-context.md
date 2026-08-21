@@ -1,6 +1,11 @@
 # Commas AI Agent — Active Context
 
-**Last updated:** 2026-08-21 · **Updated by:** Claude (Dashboard visual fidelity pass)
+**Last updated:** 2026-08-21 · **Updated by:** Claude (chat sidebar cleanup + modal opacity fix)
+
+> **Two small polish fixes on top of the Dashboard pass below:** the Chat sidebar's redundant
+> "+" button (duplicate of "New chat") is removed — see "Chat Sidebar Cleanup" below — and the
+> Connected apps modal no longer lets page content bleed through it (was using the shared
+> `main-surface` class's 88%-opacity background, now solid white for that modal only).
 
 > **The Dashboard has been rebuilt against real Commas production screenshots** (not invented,
 > not ported from `commas-ai-copilot` — that repo has no Dashboard). See "Dashboard Visual
@@ -910,6 +915,51 @@ No real OAuth, no real MCP calls, no real LLM calls, no Agent/MCP architecture c
 Resolution Center rewrite, no new design system, no new dependencies. This was scoped
 exclusively to Dashboard visual fidelity + confirming the existing AI Agent integration and
 Resolution Center survive it — nothing else was in scope and nothing else was touched.
+
+# Chat Sidebar Cleanup + Connected Apps Modal Opacity (2026-08-21)
+
+Two small, targeted fixes — no layout or architecture changes.
+
+## Chat sidebar: removed the redundant "New chat" action
+
+`src/components/chat/ChatHistoryList.tsx` had two controls that both called the exact same
+`handleNewChat` — the "New chat" text button and a separate icon-only `+` button beside it
+(`aria-label="New chat"`). Removed the `+` button and its now-unused `Plus` import; "New chat"
+is the sole entry point now. Nothing else in the header row changed (`justify-between` was
+dropped since there's only one child left, but padding/height/position of the remaining button
+are untouched).
+
+No changes were needed to `useChatStore.tsx`'s `createChat()` — it already satisfied every
+behavior the task asked to preserve: it dedupes against an existing empty chat rather than
+piling up blank rows, stamps a fresh `updatedAt` so a genuinely new chat naturally sorts to the
+top of "Today" (the history list sorts by `updatedAt` descending), leaves every other
+conversation in place, and an empty `messages: []` array is exactly what makes
+`ChatWorkspace`/`EmptyState` render the "How can I help you today?" empty state. This pass was
+purely removing the duplicate button, not touching the conversation logic underneath it.
+
+Verified live: exactly one "New chat" control renders (`getByLabel("New chat")` now matches 0
+elements — that aria-label belonged only to the removed icon button), clicking it creates a new
+"New chat" entry at the top of Today while "Sales summary — last 30 days" and yesterday's
+discount-code chat both remain in history, and the empty-state greeting, suggested prompts,
+Sources control, and credit indicator all render unchanged. 0 console errors.
+
+## Connected apps modal: solid instead of translucent
+
+`src/components/chat/ConnectedAppsModal.tsx` used the shared `.main-surface` class, whose
+`rgba(255, 255, 255, 0.88)` background is correct for page-level panels floating over the
+gradient app-shell background but let Resolution Center's text visibly bleed through when used
+for a modal (reported with a screenshot: dispute detail text readable behind the card). Fixed
+by overriding just this component's background to solid `#ffffff` via an inline style — `
+main-surface`'s shared definition in `index.css` is untouched, so every other surface using it
+(Dashboard, Resolution Center, Chat) keeps its existing translucency.
+
+## Verification (both fixes)
+
+- `npx tsc -b` — clean, 0 errors.
+- `npm run lint` — clean, 0 errors/warnings.
+- Live Playwright checks against the running dev server for both fixes, 0 console errors in
+  either. No test suite changes were needed — no existing test asserted on the removed button
+  or the modal's exact background value.
 
 # Current Repository State
 

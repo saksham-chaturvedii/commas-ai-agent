@@ -1,4 +1,4 @@
-import { Plus, MessageSquarePlus, Trash2 } from "lucide-react";
+import { MessageSquarePlus, Trash2 } from "lucide-react";
 import { useChatStore } from "../../hooks/useChatStore";
 
 function groupLabel(iso: string): "Today" | "Yesterday" | "Earlier" {
@@ -38,7 +38,7 @@ export function ChatHistoryList({
 
   return (
     <div className="flex flex-col h-full w-64 shrink-0 border-r border-black/[0.06] bg-white/60">
-      <div className="flex items-center justify-between px-3 py-3">
+      <div className="flex items-center px-3 py-3">
         <button
           type="button"
           onClick={handleNewChat}
@@ -46,14 +46,6 @@ export function ChatHistoryList({
         >
           <MessageSquarePlus size={15} strokeWidth={1.75} />
           New chat
-        </button>
-        <button
-          type="button"
-          onClick={handleNewChat}
-          aria-label="New chat"
-          className="flex items-center justify-center w-7 h-7 rounded-lg hover:bg-black/[0.04] text-[var(--color-text-quaternary)]"
-        >
-          <Plus size={15} strokeWidth={1.75} />
         </button>
       </div>
 
