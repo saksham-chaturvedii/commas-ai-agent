@@ -1,6 +1,13 @@
 # Commas AI Agent — Active Context
 
-**Last updated:** 2026-08-21 · **Updated by:** Claude (Resolution Center demo-readiness + chat credit system)
+**Last updated:** 2026-08-21 · **Updated by:** Claude (Evidence file upload flow)
+
+> **The "Add evidence" flow now supports real (mocked) file uploads** — multi-file selection,
+> drag & drop, client-side validation, a simulated Selected→Uploading→Processing→Ready
+> pipeline, image thumbnails/lightbox, and a review-before-submit step. See "Evidence File
+> Upload" below. 79/79 tests pass (was 70); verified live in a browser across all 10 scenarios
+> the task specified, including catching and fixing a real bug (files getting stuck
+> mid-pipeline) during that testing.
 
 > **Resolution Center now has 5 realistic dispute cases with deterministic Agent answers, and
 > the chat credit system was rebuilt into a real total/used/remaining model with a mock
@@ -1177,6 +1184,148 @@ everything else in this prototype); there is no Stripe, no subscriptions, no ser
 credit ledger, and no real cost is ever charged. If this prototype needs real billing later,
 that's a new integration layer entirely, not an extension of `addCredits()`.
 
+# Evidence File Upload (2026-08-21)
+
+Upgraded the existing "Add evidence" form (evidence type / title / details / Add evidence)
+into a full file-upload flow, without redesigning the modal or the Resolution Center around
+it. No real storage, no real backend — every requirement was explicit that this stays mocked.
+
+## What was built
+
+- **`src/lib/evidenceUpload.ts`** (new) — pure logic module, no JSX: file-type/size constants,
+  `formatFileSize()`, and the `useEvidenceFiles()` hook owning the file list and its mock
+  upload pipeline.
+- **`src/components/resolution/EvidenceUploadArea.tsx`** (new) — the presentational dropzone +
+  per-file row list + image lightbox. Purely props-driven (`files`, `notice`, `onFilesAdded`,
+  `onRemove`, `onRetry`) so all state/timing logic stays in the hook.
+- **`src/components/resolution/AddEvidenceModal.tsx`** (rewritten) — gained a `"form" |
+  "review"` step machine and an `EvidenceUploadArea` between Details and the footer buttons.
+  Same 480px-wide modal chrome, same type-pill/title/details fields, same `btn-dark`/
+  `btn-secondary` buttons as before — nothing about the existing visual language changed, the
+  body just grew a step and a section.
+- **`src/lib/disputeData.ts`** — `AIEvidenceItem` gained `category: string` (which checklist
+  row this item belongs to) and `files: EvidenceFileMeta[]` (`{name, type, size, mockUrl}`,
+  matching the task's requested shape).
+- **`src/components/resolution/DisputeDetail.tsx`** — `ManualEvidenceCard` now renders each
+  session-added evidence item under its category row (title + attachment count via a
+  `Paperclip` icon), and shows a green "Evidence added successfully — …" confirmation for 3s
+  after a submission.
+- **`src/App.tsx`** — added `evidenceByDispute: Record<string, AIEvidenceItem[]>` state in
+  `AppShell` (not inside `DisputeDetail`) specifically so evidence survives the seller
+  navigating back to the Resolution Center list and returning — `DisputeDetail` fully unmounts
+  while `rcView === "list"`, so anything stored in its own local state would have been lost;
+  lifting it to the component that never unmounts satisfies the task's "remain represented for
+  the duration of the session" requirement without adding a persistence layer.
+
+## File constraints (new — none existed before this pass)
+
+No file-type or size limits existed anywhere in the prototype before this pass. Used the
+task's own suggested defaults, since there was nothing established to match:
+**Supported: JPG, PNG, WEBP, PDF, DOC, DOCX. Maximum size: 10 MB per file.** Shown directly in
+the UI (`src/lib/evidenceUpload.ts`'s `SUPPORTED_LABEL`/`MAX_FILE_SIZE_BYTES`).
+
+## Validation (client-side, never silent)
+
+Checked per file on selection, in this order: **duplicate** (same name + size as an existing
+file — rejected with an inline notice under the dropzone, not added as a second row, since a
+literal duplicate has no value as a separate list entry) → **empty** (0 bytes — "This file
+appears to be empty or corrupted") → **unsupported type** → **oversized** (states the file's
+actual size against the 10 MB limit). Unsupported/oversized/empty files ARE added to the list
+(status `"error"`, red-outlined row, inline reason + Retry), per the task's explicit "do not
+silently reject" — the seller sees exactly which file failed and why, and can remove or retry
+it. The primary button stays disabled while any file is present in a non-`"ready"` state
+(including `"error"`), so a bad file must be dealt with before continuing — attachments
+themselves are optional, so 0 files never blocks the flow.
+
+## Upload/processing simulation
+
+Every valid file runs `selected → uploading (550ms) → processing (550ms) → ready`, timers
+owned by `useEvidenceFiles()` and cleaned up on unmount. **Deterministic failure demo**: a
+filename containing "fail" (case-insensitive) always fails at the upload step instead of
+reaching "processing" — same convention as the chat pipeline's hidden "all roads lead to" test
+phrase, giving a reproducible way to demo the "Upload failed" + Retry state without real
+randomness. Retry re-runs the exact same pipeline (so retrying a permanently-"fail"-named file
+fails again by design — the seller is expected to remove and replace it, which the UI
+supports).
+
+## Review step
+
+Clicking "Add evidence" on the form only advances to a review screen if `title` is non-empty
+and every file is `"ready"` — it does not submit immediately (per the task, section 6). The
+review screen shows Evidence type / Title / Details / Attachments (name + size per file, with
+a count in the section header) inside the existing `content-card` treatment, plus Cancel /
+Back / **Submit evidence**. Back returns to the form with every field and file intact (the
+form component doesn't unmount between steps — same `AddEvidenceModal` instance, just a
+`step` state flip).
+
+## Success state & Agent-context data shape
+
+On submit, the modal closes and `ManualEvidenceCard` shows "Evidence added successfully —
+"{title}" added — N files." for 3 seconds, the category row's badge flips to "Added" (or "Add
+another" becomes available), and a compact sub-line lists the item's title + attachment count
+— visible immediately and again on any later visit to the same dispute within the session.
+Each stored `AIEvidenceItem` carries exactly the shape the task asked for future Agent
+reasoning to use:
+```ts
+{ id, title, record, why, sourceType, sourceLabel, addedBy, category,
+  files: [{ name, type, size, mockUrl }] }
+```
+Per the task's explicit scope, this phase does **not** wire that data into the Agent/stub LLM
+— no ingestion, OCR, embeddings, or LLM processing were implemented; the "mock ingestion
+pipeline" the task asked for is the Selected→Ready state machine itself, and the stored
+metadata is what a later phase would hand to the Agent.
+
+## A real bug this feature caught during its own testing
+
+`addFiles()` originally computed which files to schedule for upload (`toSchedule`) by mutating
+an array *inside* the `setFiles()` updater callback, then read that array immediately after —
+React does not guarantee an updater function runs before the next line of code executes, so
+`toSchedule` was empty when `.forEach()` ran, and newly selected files silently never left the
+"selected" state (stuck showing "Waiting…" forever). Caught by the live-verification pass
+below (files never reached "Ready"), fixed by building the new `EvidenceFile` entries with
+plain synchronous JS against `filesRef.current` *before* calling `setFiles`, then scheduling
+directly from that plain array — no dependency on React's update timing. Locked in by
+`tests/EvidenceUpload.test.tsx`'s first test (asserts the full Selected→Ready transition under
+fake timers).
+
+## Verification
+
+- `npx tsc -b`, `npm run lint`, `npm run build` — clean.
+- **9 new tests** (`tests/EvidenceUpload.test.tsx`): the Selected→Ready pipeline under fake
+  timers, each validation rule (unsupported type, oversized, empty, duplicate), the disabled→
+  enabled button transition on removing a bad file, the deterministic failure trigger +
+  retry, the full form→review→submit flow asserting the exact `AIEvidenceItem` payload
+  (category, ready-files-only), and Back preserving form state.
+- **Live browser walkthrough** (screenshots retained in job scratch space) covering all 10
+  scenarios the task asked to manually test: one image (thumbnail preview, reaches Ready), one
+  PDF, multiple mixed files together, an invalid file type (`.txt`, shown as an error row),
+  an oversized file (11 MB, shown with its actual size), removing attachments (invalid ones,
+  confirmed the button re-enables), adding more files afterward, the review step (correct
+  type/title/details/attachment count and list), a successful submission (toast +
+  category-row update), and evidence still present after navigating back to the Resolution
+  Center list and returning to the same dispute. Also exercised beyond the required 10: the
+  duplicate-file notice and the image lightbox. Zero console errors throughout.
+
+## Known limitations
+
+- **Files are never actually uploaded anywhere.** `EvidenceFileMeta.mockUrl` is a browser
+  object URL (image files, revoked on removal/unmount) or a synthetic `mock://evidence/…`
+  string (everything else) — nothing leaves the browser tab, and nothing survives a real page
+  reload (evidence lives in `AppShell` React state only, not localStorage — a deliberate choice
+  since the task scoped this to "for the duration of the session," not persistent storage).
+- **The AI Agent doesn't know these files exist yet.** Per the task's explicit "do NOT
+  implement... for this phase," `PageContext`/the stub LLM were not touched — a future pass
+  would need to decide how `AIEvidenceItem.files` surfaces into the Agent's dispute context.
+- **Drag-and-drop shares its handler with the file-picker input** (`onDrop` calls the identical
+  `addFiles()` the `<input>`'s `onChange` calls), so it was verified by code review and a
+  visual hover-state check rather than a simulated OS drag gesture — Playwright's synthetic
+  `DataTransfer` drag simulation was judged not worth the added script complexity here since
+  the two paths converge immediately into the same, already-tested function.
+- **Image "corruption" detection is limited to 0-byte files.** A file with a valid extension
+  and non-zero size but genuinely corrupted image data would still be accepted and attempted
+  as a thumbnail (which would just fail to render) — full content-sniffing validation is out
+  of scope for a client-side mock.
+
 # Current Repository State
 
 - `docs/` — full spec set (`PROTOTYPE_SPEC.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,
@@ -1190,14 +1339,14 @@ that's a new integration layer entirely, not an extension of `addCredits()`.
   agent runtime, MCP client, and mock Commas MCP server — see "Commas Tool Layer" above for
   the full file list. `npm run dev:all` runs both together (or `dev` + `dev:server`
   separately); Vite proxies `/api` to the backend.
-- `tests/` — **70 Vitest tests passing**: frontend (`liteMarkdown`, `Sidebar`, `ChatFlow`,
-  `CreditSystem` — mocks `fetch` at the network boundary, covers multi-turn history, the
-  approval flow, persistence, and all 6 credit scenarios A–F) + `tests/server/` (errors,
-  registry, mcpClient, runtime, app, `disputeIntents` — exercising the real backend with 6
-  source adapters, the write-approval pause/resume path, and all 5 demo dispute cases' stub
-  answers). No Playwright e2e suite committed yet (IMPLEMENTATION_PLAN.md Phase 4's acceptance
-  criteria calls for one; every session so far has verified live behavior via ad-hoc scripts
-  instead).
+- `tests/` — **79 Vitest tests passing**: frontend (`liteMarkdown`, `Sidebar`, `ChatFlow`,
+  `CreditSystem`, `EvidenceUpload` — mocks `fetch` at the network boundary, covers multi-turn
+  history, the approval flow, persistence, all 6 credit scenarios A–F, and the evidence
+  upload/validation pipeline) + `tests/server/` (errors, registry, mcpClient, runtime, app,
+  `disputeIntents` — exercising the real backend with 6 source adapters, the write-approval
+  pause/resume path, and all 5 demo dispute cases' stub answers). No Playwright e2e suite
+  committed yet (IMPLEMENTATION_PLAN.md Phase 4's acceptance criteria calls for one; every
+  session so far has verified live behavior via ad-hoc scripts instead).
 - `server/adapters/` — the `SourceAdapter` abstraction (`types.ts`) plus 6 adapters:
   `commasAdapter.ts` and `meetingsAdapters.ts` (Fathom, Zoom — all MCP-backed) and
   `gmailAdapter.ts` / `calendarAdapter.ts` / `crmAdapter.ts` (API-style, no MCP). See
@@ -1269,6 +1418,15 @@ that's a new integration layer entirely, not an extension of `addCredits()`.
   Verified: typecheck/lint/70 tests (+22 net) + an extensive live browser walkthrough covering
   every dispute case, every demo question, the hidden phrase, and all 6 credit scenarios
   (A–F) from the task, zero console errors throughout.
+- **Evidence file upload flow** (2026-08-21) — upgraded "Add evidence" with multi-file
+  selection/drag-drop, client-side validation (unsupported type, oversized, empty, duplicate —
+  never silent), a deterministic Selected→Uploading→Processing→Ready simulation with a
+  reproducible failure/retry demo path, image thumbnails + a lightbox preview, and a
+  review-before-submit step, without redesigning the modal or touching the Agent/MCP
+  architecture — see "Evidence File Upload" above, including a real bug it caught (files
+  getting stuck mid-pipeline due to a React state-timing bug) and its fix. Verified:
+  typecheck/lint/build clean, 79 tests (+9 net), and a live 10-scenario browser walkthrough
+  matching the task's own manual test list, zero console errors.
 
 # In Progress
 

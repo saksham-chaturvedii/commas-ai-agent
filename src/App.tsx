@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ChatStoreProvider, useChatStore } from "./hooks/useChatStore";
 import type { PageContext, ViewId } from "./lib/types";
 import { DASHBOARD_CONTEXT, buildDisputeContext } from "./lib/mockData";
+import type { AIEvidenceItem } from "./lib/disputeData";
 import { Sidebar } from "./components/shell/Sidebar";
 import { TopNav } from "./components/shell/TopNav";
 import { RightPanel } from "./components/chat/RightPanel";
@@ -24,6 +25,10 @@ function AppShell() {
   const [view, setView] = useState<ViewId>("dashboard");
   const [rcView, setRcView] = useState<"list" | "detail">("list");
   const [selectedDisputeId, setSelectedDisputeId] = useState<string>("2481");
+  // Session-lifetime, per-dispute evidence added via "Add evidence" — lives here (not inside
+  // DisputeDetail) so it survives the seller navigating back to the Resolution Center list and
+  // returning, since DisputeDetail fully unmounts while rcView === "list".
+  const [evidenceByDispute, setEvidenceByDispute] = useState<Record<string, AIEvidenceItem[]>>({});
   const [chatPageActiveId, setChatPageActiveId] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelChatId, setPanelChatId] = useState<string | null>(null);
@@ -41,6 +46,10 @@ function AppShell() {
   };
 
   const closePanel = () => setPanelOpen(false);
+
+  const addEvidenceItem = (disputeId: string, item: AIEvidenceItem) => {
+    setEvidenceByDispute((prev) => ({ ...prev, [disputeId]: [...(prev[disputeId] ?? []), item] }));
+  };
 
   // The right panel is scoped to "other pages" (spec §2.5) — the Chat view has its own full
   // conversation surface, so showing the panel there would duplicate the composer/credits and
@@ -92,6 +101,8 @@ function AppShell() {
                 <DisputeDetail
                   key={selectedDisputeId}
                   disputeId={selectedDisputeId}
+                  evidenceItems={evidenceByDispute[selectedDisputeId] ?? []}
+                  onAddEvidence={(item) => addEvidenceItem(selectedDisputeId, item)}
                   onBack={() => setRcView("list")}
                   onInvestigate={() => openPanel(buildDisputeContext(selectedDisputeId))}
                 />

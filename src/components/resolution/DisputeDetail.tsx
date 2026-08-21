@@ -6,6 +6,7 @@ import {
   Calendar,
   CircleDashed,
   FileText,
+  Paperclip,
   Receipt,
   Sparkles,
   Check,
@@ -13,7 +14,7 @@ import {
 import { Badge } from "../shell/Badge";
 import { CardTitle } from "./CardTitle";
 import { AddEvidenceModal } from "./AddEvidenceModal";
-import { evidenceCategories, getDispute } from "../../lib/disputeData";
+import { evidenceCategories, getDispute, type AIEvidenceItem } from "../../lib/disputeData";
 
 /**
  * Dispute Detail page, ported from commas-ai-copilot and evolved: the old prototype's inline
@@ -44,66 +45,109 @@ function DetailRow({
   );
 }
 
-function ManualEvidenceCard({ initialAdded }: { initialAdded: string[] }) {
-  const [added, setAdded] = useState<Set<string>>(new Set(initialAdded));
+function ManualEvidenceCard({
+  initialAdded,
+  evidenceItems,
+  onAddEvidence,
+}: {
+  initialAdded: string[];
+  evidenceItems: AIEvidenceItem[];
+  onAddEvidence: (item: AIEvidenceItem) => void;
+}) {
   const [modalFor, setModalFor] = useState<string | null>(null);
+  const [justAdded, setJustAdded] = useState<string | null>(null);
+
+  const itemsByCategory = new Map<string, AIEvidenceItem[]>();
+  for (const item of evidenceItems) {
+    itemsByCategory.set(item.category, [...(itemsByCategory.get(item.category) ?? []), item]);
+  }
+  const addedCount = evidenceCategories.filter(
+    (c) => initialAdded.includes(c.label) || (itemsByCategory.get(c.label)?.length ?? 0) > 0,
+  ).length;
+
+  const handleAdd = (item: AIEvidenceItem) => {
+    onAddEvidence(item);
+    setModalFor(null);
+    setJustAdded(`"${item.title}" added${item.files.length > 0 ? ` — ${item.files.length} file${item.files.length === 1 ? "" : "s"}` : ""}.`);
+    window.setTimeout(() => setJustAdded(null), 3000);
+  };
 
   return (
     <div className="content-card" style={{ padding: 24, gap: 0 }}>
       <div className="flex items-baseline justify-between mb-1">
         <CardTitle>Evidence</CardTitle>
         <span className="text-[12px] text-[#9ca3af]">
-          {added.size} of {evidenceCategories.length} items added
+          {addedCount} of {evidenceCategories.length} items added
         </span>
       </div>
+      {justAdded && (
+        <div className="flex items-center gap-1.5 mt-2 text-[12.5px] font-medium text-[var(--color-success-text)]">
+          <Check size={13} strokeWidth={2.5} /> Evidence added successfully — {justAdded}
+        </div>
+      )}
       <div className="mt-2">
         {evidenceCategories.map((item) => {
-          const isAdded = added.has(item.label);
+          const sessionItems = itemsByCategory.get(item.label) ?? [];
+          const isAdded = initialAdded.includes(item.label) || sessionItems.length > 0;
           return (
-            <div
-              key={item.label}
-              className="flex items-center gap-3 py-3 border-t border-[#ebebeb] first:border-t-0"
-            >
-              <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-[#fafafa] border border-[#ebebeb] shrink-0">
-                <FileText size={15} strokeWidth={1.75} className="text-[#9ca3af]" />
+            <div key={item.label} className="py-3 border-t border-[#ebebeb] first:border-t-0">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-[#fafafa] border border-[#ebebeb] shrink-0">
+                  <FileText size={15} strokeWidth={1.75} className="text-[#9ca3af]" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14px] leading-[20px] font-medium text-[#1a1a1a]">{item.label}</div>
+                  <div className="text-[12px] leading-[16px] text-[#9ca3af] mt-0.5">{item.description}</div>
+                </div>
+                {isAdded ? <Badge variant="success">Added</Badge> : <Badge variant="neutral">Not added</Badge>}
+                <button
+                  type="button"
+                  className="btn-toolbar shrink-0"
+                  style={{ height: 29 }}
+                  onClick={() => setModalFor(item.label)}
+                >
+                  {isAdded ? "Add another" : "Add"}
+                </button>
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-[14px] leading-[20px] font-medium text-[#1a1a1a]">{item.label}</div>
-                <div className="text-[12px] leading-[16px] text-[#9ca3af] mt-0.5">{item.description}</div>
-              </div>
-              {isAdded ? <Badge variant="success">Added</Badge> : <Badge variant="neutral">Not added</Badge>}
-              <button
-                type="button"
-                className="btn-toolbar shrink-0"
-                style={{ height: 29 }}
-                onClick={() => setModalFor(item.label)}
-              >
-                {isAdded ? "Add another" : "Add"}
-              </button>
+
+              {sessionItems.length > 0 && (
+                <ul className="flex flex-col gap-1 mt-2.5 pl-11">
+                  {sessionItems.map((si) => (
+                    <li key={si.id} className="flex items-center gap-1.5 text-[12.5px] text-[#404040]">
+                      <span className="truncate font-medium text-[#1a1a1a]">{si.title}</span>
+                      {si.files.length > 0 && (
+                        <span className="inline-flex items-center gap-1 text-[#9ca3af] shrink-0">
+                          <Paperclip size={11} strokeWidth={1.75} />
+                          {si.files.length} file{si.files.length === 1 ? "" : "s"}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           );
         })}
       </div>
 
-      {modalFor && (
-        <AddEvidenceModal
-          onClose={() => setModalFor(null)}
-          onAdd={() => {
-            setAdded((prev) => new Set(prev).add(modalFor));
-            setModalFor(null);
-          }}
-        />
-      )}
+      {modalFor && <AddEvidenceModal category={modalFor} onClose={() => setModalFor(null)} onAdd={handleAdd} />}
     </div>
   );
 }
 
 export function DisputeDetail({
   disputeId,
+  evidenceItems,
+  onAddEvidence,
   onBack,
   onInvestigate,
 }: {
   disputeId: string;
+  /** Session-lifetime evidence added via "Add evidence" — owned by App.tsx (AppShell) so it
+   * survives DisputeDetail unmounting when the seller navigates back to the list and returns
+   * (docs/active-context.md — "Evidence File Upload"). */
+  evidenceItems: AIEvidenceItem[];
+  onAddEvidence: (item: AIEvidenceItem) => void;
   onBack: () => void;
   onInvestigate: () => void;
 }) {
@@ -157,7 +201,11 @@ export function DisputeDetail({
       <div className="flex gap-5 mt-5 items-start">
         {/* left column */}
         <div className="flex flex-col gap-5 flex-[2] min-w-0">
-          <ManualEvidenceCard initialAdded={dispute.initialEvidenceAdded} />
+          <ManualEvidenceCard
+            initialAdded={dispute.initialEvidenceAdded}
+            evidenceItems={evidenceItems}
+            onAddEvidence={onAddEvidence}
+          />
 
           {/* response card */}
           <div className="content-card" style={{ padding: 24, gap: 0 }}>

@@ -145,6 +145,16 @@ export type EvidenceSourceType =
   | "communication"
   | "manual";
 
+/** Mocked file metadata attached to a seller-submitted evidence item — no real upload/storage,
+ * see src/lib/evidenceUpload.ts. `mockUrl` is an object URL for images (revoked once the file
+ * list unmounts) or a synthetic `mock://` reference for other file types. */
+export interface EvidenceFileMeta {
+  name: string;
+  type: string;
+  size: number;
+  mockUrl: string;
+}
+
 export type AIEvidenceItem = {
   id: string;
   title: string;
@@ -154,6 +164,10 @@ export type AIEvidenceItem = {
   sourceLabel: string;
   sourceAnchor?: string;
   addedBy: "ai" | "seller";
+  /** Which evidence checklist category (evidenceCategories[].label) this item belongs to —
+   * lets the Resolution Center group/display session-added items per row without a redesign. */
+  category: string;
+  files: EvidenceFileMeta[];
 };
 
 export const evidenceCategories = [
