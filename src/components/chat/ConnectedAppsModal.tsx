@@ -15,6 +15,7 @@ export function ConnectedAppsModal({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onMouseDown={onClose}>
       <div
         className="main-surface w-full max-w-lg max-h-[85vh] overflow-y-auto p-5"
+        style={{ background: "#ffffff" }}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between mb-1">
