@@ -6,15 +6,17 @@ import {
   Calendar,
   CircleDashed,
   FileText,
-  Paperclip,
+  Image as ImageIcon,
   Receipt,
   Sparkles,
   Check,
+  X,
 } from "lucide-react";
 import { Badge } from "../shell/Badge";
 import { CardTitle } from "./CardTitle";
 import { AddEvidenceModal } from "./AddEvidenceModal";
-import { evidenceCategories, getDispute, type AIEvidenceItem } from "../../lib/disputeData";
+import { evidenceCategories, getDispute, type AIEvidenceItem, type EvidenceFileMeta } from "../../lib/disputeData";
+import { formatFileSize } from "../../lib/evidenceUpload";
 
 /**
  * Dispute Detail page, ported from commas-ai-copilot and evolved: the old prototype's inline
@@ -23,7 +25,66 @@ import { evidenceCategories, getDispute, type AIEvidenceItem } from "../../lib/d
  * that copilot card). The manual evidence checklist, response draft box, and the
  * dispute/customer/transaction detail cards are ported as-is. Parameterized by `disputeId` so
  * all 5 demo cases (docs/active-context.md) share this one page.
+ *
+ * Resolved disputes (status !== "Needs response") render read-only, per docs/active-context.md
+ * — "Resolved Disputes Are Read-Only": no Add/Add another buttons, no editable response, a
+ * "Submitted response" record instead. One implementation, conditionally rendered — not two
+ * separate page variants.
  */
+
+function AttachmentChip({ file, onPreview }: { file: EvidenceFileMeta; onPreview: (file: EvidenceFileMeta) => void }) {
+  const Icon = file.type.startsWith("image/") ? ImageIcon : FileText;
+  return (
+    <button
+      type="button"
+      onClick={() => onPreview(file)}
+      className="inline-flex items-center gap-1.5 h-7 pl-1.5 pr-2.5 rounded-full border border-[var(--color-border-card)] bg-white hover:bg-[#fafafa] text-[12px] text-[#404040] cursor-pointer transition-colors"
+    >
+      <Icon size={12} strokeWidth={1.75} className="text-[#9ca3af] shrink-0" />
+      <span className="truncate max-w-[180px]">{file.name}</span>
+    </button>
+  );
+}
+
+/** Full-size preview for a clicked attachment — images render directly (including seeded
+ * historical evidence's placeholder mock images, see disputeData.ts's mockImageDataUri); other
+ * file types show an honest "no preview" card rather than pretending to open a real document. */
+function AttachmentPreviewOverlay({ file, onClose }: { file: EvidenceFileMeta; onClose: () => void }) {
+  const isImage = file.type.startsWith("image/");
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center p-8"
+      style={{ background: "rgba(0,0,0,0.7)" }}
+      onMouseDown={onClose}
+    >
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close preview"
+        className="absolute top-5 right-5 flex items-center justify-center w-9 h-9 rounded-full bg-white/10 text-white hover:bg-white/20"
+      >
+        <X size={18} strokeWidth={1.75} />
+      </button>
+      {isImage ? (
+        <img
+          src={file.mockUrl}
+          alt={file.name}
+          className="max-w-full max-h-full rounded-lg"
+          onMouseDown={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <div className="bg-white rounded-xl p-6 w-[320px] text-center" onMouseDown={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-center w-12 h-12 rounded-lg bg-[#fafafa] border border-[#ebebeb] mx-auto mb-3">
+            <FileText size={20} strokeWidth={1.75} className="text-[#9ca3af]" />
+          </div>
+          <div className="text-[14px] font-medium text-[#1a1a1a] truncate">{file.name}</div>
+          <div className="text-[12px] text-[#9ca3af] mt-1">{formatFileSize(file.size)}</div>
+          <p className="text-[12px] text-[#9ca3af] mt-3">Preview isn't available for this file type in the prototype.</p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function DetailRow({
   icon: Icon,
@@ -49,13 +110,18 @@ function ManualEvidenceCard({
   initialAdded,
   evidenceItems,
   onAddEvidence,
+  isResolved,
 }: {
   initialAdded: string[];
   evidenceItems: AIEvidenceItem[];
   onAddEvidence: (item: AIEvidenceItem) => void;
+  /** Resolved disputes show every item's full title/description/attachments but drop all
+   * Add/Add-another controls — a historical record, not an editable checklist. */
+  isResolved: boolean;
 }) {
   const [modalFor, setModalFor] = useState<string | null>(null);
   const [justAdded, setJustAdded] = useState<string | null>(null);
+  const [previewFile, setPreviewFile] = useState<EvidenceFileMeta | null>(null);
 
   const itemsByCategory = new Map<string, AIEvidenceItem[]>();
   for (const item of evidenceItems) {
@@ -87,8 +153,8 @@ function ManualEvidenceCard({
       )}
       <div className="mt-2">
         {evidenceCategories.map((item) => {
-          const sessionItems = itemsByCategory.get(item.label) ?? [];
-          const isAdded = initialAdded.includes(item.label) || sessionItems.length > 0;
+          const items = itemsByCategory.get(item.label) ?? [];
+          const isAdded = initialAdded.includes(item.label) || items.length > 0;
           return (
             <div key={item.label} className="py-3 border-t border-[#ebebeb] first:border-t-0">
               <div className="flex items-center gap-3">
@@ -100,26 +166,30 @@ function ManualEvidenceCard({
                   <div className="text-[12px] leading-[16px] text-[#9ca3af] mt-0.5">{item.description}</div>
                 </div>
                 {isAdded ? <Badge variant="success">Added</Badge> : <Badge variant="neutral">Not added</Badge>}
-                <button
-                  type="button"
-                  className="btn-toolbar shrink-0"
-                  style={{ height: 29 }}
-                  onClick={() => setModalFor(item.label)}
-                >
-                  {isAdded ? "Add another" : "Add"}
-                </button>
+                {!isResolved && (
+                  <button
+                    type="button"
+                    className="btn-toolbar shrink-0"
+                    style={{ height: 29 }}
+                    onClick={() => setModalFor(item.label)}
+                  >
+                    {isAdded ? "Add another" : "Add"}
+                  </button>
+                )}
               </div>
 
-              {sessionItems.length > 0 && (
-                <ul className="flex flex-col gap-1 mt-2.5 pl-11">
-                  {sessionItems.map((si) => (
-                    <li key={si.id} className="flex items-center gap-1.5 text-[12.5px] text-[#404040]">
-                      <span className="truncate font-medium text-[#1a1a1a]">{si.title}</span>
+              {items.length > 0 && (
+                <ul className="flex flex-col gap-2.5 mt-2.5 pl-11">
+                  {items.map((si) => (
+                    <li key={si.id}>
+                      <div className="text-[12.5px] font-medium text-[#1a1a1a]">{si.title}</div>
+                      {si.record && <div className="text-[12px] leading-[17px] text-[#6b7280] mt-0.5">{si.record}</div>}
                       {si.files.length > 0 && (
-                        <span className="inline-flex items-center gap-1 text-[#9ca3af] shrink-0">
-                          <Paperclip size={11} strokeWidth={1.75} />
-                          {si.files.length} file{si.files.length === 1 ? "" : "s"}
-                        </span>
+                        <div className="flex flex-wrap gap-1.5 mt-1.5">
+                          {si.files.map((f, i) => (
+                            <AttachmentChip key={`${si.id}-${i}`} file={f} onPreview={setPreviewFile} />
+                          ))}
+                        </div>
                       )}
                     </li>
                   ))}
@@ -130,7 +200,10 @@ function ManualEvidenceCard({
         })}
       </div>
 
-      {modalFor && <AddEvidenceModal category={modalFor} onClose={() => setModalFor(null)} onAdd={handleAdd} />}
+      {!isResolved && modalFor && (
+        <AddEvidenceModal category={modalFor} onClose={() => setModalFor(null)} onAdd={handleAdd} />
+      )}
+      {previewFile && <AttachmentPreviewOverlay file={previewFile} onClose={() => setPreviewFile(null)} />}
     </div>
   );
 }
@@ -154,6 +227,10 @@ export function DisputeDetail({
   const [response, setResponse] = useState("");
   const [justSaved, setJustSaved] = useState(false);
   const dispute = getDispute(disputeId);
+  // "Needs response" is the only non-terminal status this prototype's data models today;
+  // written as a negation (rather than === "Won") so a future "Lost" status is read-only too
+  // without needing another branch here.
+  const isResolved = dispute ? dispute.status !== "Needs response" : false;
 
   const saveDraft = () => {
     setJustSaved(true);
@@ -205,42 +282,67 @@ export function DisputeDetail({
             initialAdded={dispute.initialEvidenceAdded}
             evidenceItems={evidenceItems}
             onAddEvidence={onAddEvidence}
+            isResolved={isResolved}
           />
 
-          {/* response card */}
-          <div className="content-card" style={{ padding: 24, gap: 0 }}>
-            <div className="flex items-center gap-2.5 mb-3">
-              <CardTitle>Your response</CardTitle>
-            </div>
-            <div className="textarea-shell">
-              <textarea
-                value={response}
-                onChange={(e) => setResponse(e.target.value)}
-                placeholder="Describe why this dispute should be resolved in your favor... (ask the AI to draft this for you)"
-              />
-            </div>
-            <div className="flex items-center gap-3 mt-4">
-              {justSaved && (
-                <span className="inline-flex items-center gap-1 text-[12px] leading-[17px] text-[#4e9b11] font-medium">
-                  <Check size={13} strokeWidth={2.5} />
-                  Draft saved
-                </span>
+          {isResolved ? (
+            <div className="content-card" style={{ padding: 24, gap: 0 }}>
+              <div className="mb-3">
+                <CardTitle>Submitted response</CardTitle>
+              </div>
+              <p className="text-[14px] leading-[21px] text-[#1a1a1a]">
+                {dispute.submittedResponse?.text ?? "No response was recorded for this case."}
+              </p>
+              {dispute.submittedResponse && (
+                <div className="flex items-center gap-8 mt-4 pt-4 border-t border-[#ebebeb]">
+                  <div>
+                    <div className="text-[11px] text-[#9ca3af]">Submitted on</div>
+                    <div className="text-[13px] font-medium text-[#1a1a1a] mt-0.5">
+                      {dispute.submittedResponse.submittedAt}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-[#9ca3af]">Status</div>
+                    <div className="text-[13px] font-medium text-[#1a1a1a] mt-0.5">Submitted</div>
+                  </div>
+                </div>
               )}
-              <div className="flex-1" />
-              <button type="button" className="btn-secondary" style={{ height: 40 }} onClick={saveDraft}>
-                Save draft
-              </button>
-              <button
-                type="button"
-                disabled
-                className="btn-dark"
-                style={{ height: 40, opacity: 0.4, cursor: "not-allowed" }}
-                title="Submission is simulated in this prototype"
-              >
-                Submit response
-              </button>
             </div>
-          </div>
+          ) : (
+            <div className="content-card" style={{ padding: 24, gap: 0 }}>
+              <div className="flex items-center gap-2.5 mb-3">
+                <CardTitle>Your response</CardTitle>
+              </div>
+              <div className="textarea-shell">
+                <textarea
+                  value={response}
+                  onChange={(e) => setResponse(e.target.value)}
+                  placeholder="Describe why this dispute should be resolved in your favor... (ask the AI to draft this for you)"
+                />
+              </div>
+              <div className="flex items-center gap-3 mt-4">
+                {justSaved && (
+                  <span className="inline-flex items-center gap-1 text-[12px] leading-[17px] text-[#4e9b11] font-medium">
+                    <Check size={13} strokeWidth={2.5} />
+                    Draft saved
+                  </span>
+                )}
+                <div className="flex-1" />
+                <button type="button" className="btn-secondary" style={{ height: 40 }} onClick={saveDraft}>
+                  Save draft
+                </button>
+                <button
+                  type="button"
+                  disabled
+                  className="btn-dark"
+                  style={{ height: 40, opacity: 0.4, cursor: "not-allowed" }}
+                  title="Submission is simulated in this prototype"
+                >
+                  Submit response
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* right column */}

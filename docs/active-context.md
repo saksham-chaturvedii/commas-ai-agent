@@ -1,6 +1,13 @@
 # Commas AI Agent — Active Context
 
-**Last updated:** 2026-08-21 · **Updated by:** Claude (Evidence file upload flow)
+**Last updated:** 2026-08-21 · **Updated by:** Claude (Resolved-dispute read-only + Dispute AI session identity)
+
+> **Resolved disputes are now strictly read-only, and a real bug in the dispute AI panel's
+> session handling is fixed.** See "Resolved Disputes Are Read-Only" and "Dispute AI Session
+> Identity" below. The second one caught and fixed a genuine React state-timing bug in
+> `useChatStore.tsx`'s `createChat()` — the same bug class as the Evidence Upload fix below —
+> that made the dispute AI panel render nothing at all after starting a new session post-
+> deletion. 82/82 tests pass (was 79); verified live across every case the task specified.
 
 > **The "Add evidence" flow now supports real (mocked) file uploads** — multi-file selection,
 > drag & drop, client-side validation, a simulated Selected→Uploading→Processing→Ready
@@ -1326,6 +1333,149 @@ fake timers).
   as a thumbnail (which would just fail to render) — full content-sniffing validation is out
   of scope for a client-side mock.
 
+# Resolved Disputes Are Read-Only (2026-08-21)
+
+Previously, `DisputeDetail.tsx` showed the same editable checklist/response UI regardless of
+dispute status — a resolved case (Priya Nair, #2390, Won) still displayed "Add another"
+buttons and an empty "Your response" textarea with active Save draft/Submit response buttons,
+which is wrong for a closed historical record.
+
+## Read-only rule
+
+`isResolved = dispute.status !== "Needs response"` (written as a negation, not `=== "Won"`,
+so a future "Lost" status is read-only too without another branch). One `DisputeDetail`
+implementation, conditionally rendered — not two page variants, per the task's explicit
+instruction.
+
+- **Evidence card** (`ManualEvidenceCard`): the Add/Add-another button is hidden entirely when
+  `isResolved`; the category checklist, Added/Not-added badges, and item counts are unchanged
+  either way. Every evidence item (seeded or session-added) now renders its full title +
+  description, not just a count — a strictly richer display applied uniformly to both resolved
+  and active disputes, so there's no separate "historical" rendering path.
+- **Attachments are clickable in both states**: a new `AttachmentChip` (icon + filename) opens
+  `AttachmentPreviewOverlay` — images render directly (including resolved cases' seeded
+  placeholder images, see below); other file types show an honest "Preview isn't available for
+  this file type in the prototype" card rather than pretending to open a real document.
+- **Response section**: resolved disputes show a new read-only "Submitted response" card
+  (`dispute.submittedResponse.text` + "Submitted on" + "Status: Submitted") instead of the
+  editable textarea/Save draft/Submit response controls. Active disputes are completely
+  unchanged.
+- **"Investigate with AI" stays enabled for resolved disputes** — deliberately, not disabled.
+  The stub LLM's dispute-intent branch (added in the earlier "Resolution Center Demo-
+  Readiness" pass) already answers why/evidence/draft/recommend/summarize questions correctly
+  for the `"resolved"` scenario ("This dispute is already resolved…", "No action needed…",
+  "there's nothing left to draft") — the architecture was already safe for this, so disabling
+  the button would have removed a working, informative capability for no reason. This is the
+  "whichever behavior is already consistent with the current architecture" choice the task
+  asked for.
+
+## Demo data added (Priya Nair, #2390)
+
+`DisputeCase` gained `seedEvidenceItems: AIEvidenceItem[]` (pre-existing historical evidence,
+merged into `App.tsx`'s `evidenceByDispute` state via a lazy `useState` initializer) and
+`submittedResponse?: { text, submittedAt }`. Priya's case ships with 4 seeded items across 4
+categories — one with 2 attachments (a signed PDF + a screenshot, satisfying the task's "at
+least one item with multiple attachments") — and a full submitted-response paragraph dated
+August 8, 2026. All other cases get `seedEvidenceItems: []` (unchanged, badge-only checklist
+behavior). Seeded image attachments use `mockImageDataUri()` — a real, valid, honestly-labeled
+inline SVG data URI ("Mock evidence preview") rather than fabricating a fake real photo; no
+actual file bytes exist for historical data, consistent with the Evidence Upload pass's "no
+real storage" constraint below.
+
+## Verification
+
+- `npx tsc -b`, `npm run lint`, `npm run build` — clean.
+- Live browser: Priya's dispute shows 6/6 evidence items added, zero Add/Add-another buttons
+  anywhere, all 4 seeded items' titles visible with clickable attachment chips, a working image
+  lightbox and an honest non-image fallback, a "Submitted response" card with no textarea/Save
+  draft/Submit response, and "Submitted on"/"Status: Submitted" fields. Sarah Johnson's active
+  dispute (#2481) confirmed unchanged in the same pass — Add buttons and the editable response
+  card still present (regression check).
+
+# Dispute AI Session Identity (2026-08-21)
+
+Fixed the relationship between the global Chat history and a dispute's contextual AI session,
+and — while verifying it — found and fixed a real bug that made the dispute AI panel go
+completely blank under a specific sequence.
+
+## What the investigation found
+
+Before writing any fix, the architecture was read and then verified live (not assumed):
+`RightPanel`, `ChatHistoryList` (the main Chat page's history), and the dispute panel's
+"Investigate with AI" flow all already read from the **same single `chats` array** in
+`useChatStore.tsx` — there was never a separate/stale copy of chat history for disputes.
+`ChatHistoryList.tsx` deliberately filters dispute-context chats out of the *main* history
+list (`!c.context`), which is correct (a dispute's working chat shouldn't clutter the general
+list) — but it also meant there was **no delete affordance reachable anywhere** for a
+dispute's chat, so the task's Case D (delete a dispute's session, confirm it doesn't come
+back) wasn't even triggerable through the UI as it stood.
+
+## What was built
+
+- **`RightPanel.tsx`** gained a "Start new session" button (only shown on a dispute-context
+  chat with at least one message) that calls the exact same `deleteChat()` the main sidebar's
+  trash icon uses, then closes the panel. This is the single, real delete path for a dispute's
+  chat — not a new parallel mechanism.
+- **`mockData.ts`**'s `DISPUTE_SUGGESTED_CAPABILITIES` grew from 5 to 7 chips ("Investigate
+  this dispute," "Why is this dispute open?," "Find missing evidence," "Review customer
+  communications," "Draft my response," "Summarize this case," "What should I do next?"),
+  matching the task's example set. Every prompt was written to hit a real, already-tested stub
+  branch (either the dispute-intent why/evidence/draft/recommend/summarize router, or the
+  multi-source investigation chain via the word "dispute") — none fall through to the generic
+  "This preview only knows…" fallback the task explicitly said not to show.
+- **`EmptyState.tsx`** gained a `DisputeSummaryHeader` (shown above the greeting, dispute
+  context only): "Dispute #{id}" + "{customer} · ${amount} · {reason}" at a glance, so a fresh
+  session is unmistakably scoped to the right record. The greeting itself changed from
+  "Investigating {label}" to "How can I help resolve this dispute?" for dispute chats.
+  `ChatWorkspace.tsx` now passes `context` through to `EmptyState` instead of rendering a
+  `ContextChip` above it for the empty-state case specifically; the in-conversation `ContextChip`
+  (shown once messages exist) is completely unchanged.
+
+## A real bug found and fixed: `createChat()`'s returned id was sometimes empty
+
+Live-testing Case D (delete → reopen) surfaced a genuine bug: after "Start new session" →
+"Investigate with AI" again, the panel rendered **nothing** — not stale content, not a fresh
+empty state, just gone. Diagnosed by reading `chats` directly out of `localStorage` at each
+step: the new chat *was* being created correctly in the data layer, but `RightPanel` had bound
+to an empty-string `chatId`. Root cause: `createChat()` mutated a `resultId` variable *inside*
+the `setChats()` updater callback and returned it immediately after — the exact same bug class
+already found and fixed in `src/lib/evidenceUpload.ts`'s `addFiles()` this session (React does
+not guarantee an updater function runs before the next line of code executes). Fixed the same
+way: added a `chatsRef` mirror and rewrote `createChat()` to compute the existing-or-new chat
+with plain synchronous JS against `chatsRef.current`, then apply it via one `setChats` call —
+the return value no longer depends on reading anything out of React's update timing. Audited
+the rest of `useChatStore.tsx` for the same pattern (`let result`/`let target` mutated inside
+an updater); no other instances found.
+
+## Verification — all 4 cases from the task
+
+- **Case A** (new global chat unrelated to disputes): confirmed live — a message sent in a
+  fresh global chat appears in the main Chat history, and does not appear anywhere in a
+  separately-opened dispute's AI panel.
+- **Case B** (fresh dispute-resolution suggestions when no session exists): confirmed live —
+  opening a dispute with no prior chat shows the `DisputeSummaryHeader` + "How can I help
+  resolve this dispute?" + all 7 contextual chips, not generic content.
+- **Case C** (existing session reopens): confirmed live — sending a message, closing the
+  panel, and reopening via "Investigate with AI" resumes the exact same conversation.
+- **Case D** (deleted session never resurrects): confirmed live, including the intermediate
+  bug above — after the fix, "Start new session" → "Investigate with AI" shows the fresh
+  empty state (not the old conversation, not a blank panel), and `localStorage` confirms the
+  old chat is genuinely gone (0 dispute-context chats immediately after delete, exactly 1 new
+  one after reopening).
+- **3 new automated tests** (`tests/DisputeChatSession.test.tsx`): `createChat()`'s returned id
+  is always immediately resolvable to a real chat; delete-then-reopen produces a different,
+  real chat (not the stale id, not nothing); repeated opens on an untouched empty chat reuse
+  the same id (no pile-up, the pre-existing dedup behavior — confirmed still intact).
+- `npx tsc -b`, `npm run lint`, `npx vitest run` (82/82, +3 net), `npm run build` — all clean.
+
+## What was explicitly not changed
+
+Per the task's "do not redesign the global Chat UI": `ChatHistoryList.tsx`, the composer, the
+credit indicator's placement/styling, and the main Chat page's navigation are all untouched.
+The fix is scoped entirely to the dispute-context path (`RightPanel`, `EmptyState`,
+`ChatWorkspace`'s dispute branch, `DISPUTE_SUGGESTED_CAPABILITIES`) plus the one shared-store
+bug in `createChat()` that affected correctness regardless of UI surface.
+
 # Current Repository State
 
 - `docs/` — full spec set (`PROTOTYPE_SPEC.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,
@@ -1339,14 +1489,15 @@ fake timers).
   agent runtime, MCP client, and mock Commas MCP server — see "Commas Tool Layer" above for
   the full file list. `npm run dev:all` runs both together (or `dev` + `dev:server`
   separately); Vite proxies `/api` to the backend.
-- `tests/` — **79 Vitest tests passing**: frontend (`liteMarkdown`, `Sidebar`, `ChatFlow`,
-  `CreditSystem`, `EvidenceUpload` — mocks `fetch` at the network boundary, covers multi-turn
-  history, the approval flow, persistence, all 6 credit scenarios A–F, and the evidence
-  upload/validation pipeline) + `tests/server/` (errors, registry, mcpClient, runtime, app,
-  `disputeIntents` — exercising the real backend with 6 source adapters, the write-approval
-  pause/resume path, and all 5 demo dispute cases' stub answers). No Playwright e2e suite
-  committed yet (IMPLEMENTATION_PLAN.md Phase 4's acceptance criteria calls for one; every
-  session so far has verified live behavior via ad-hoc scripts instead).
+- `tests/` — **82 Vitest tests passing**: frontend (`liteMarkdown`, `Sidebar`, `ChatFlow`,
+  `CreditSystem`, `EvidenceUpload`, `DisputeChatSession` — mocks `fetch` at the network
+  boundary, covers multi-turn history, the approval flow, persistence, all 6 credit scenarios
+  A–F, the evidence upload/validation pipeline, and dispute chat-session identity/delete
+  semantics) + `tests/server/` (errors, registry, mcpClient, runtime, app, `disputeIntents` —
+  exercising the real backend with 6 source adapters, the write-approval pause/resume path,
+  and all 5 demo dispute cases' stub answers). No Playwright e2e suite committed yet
+  (IMPLEMENTATION_PLAN.md Phase 4's acceptance criteria calls for one; every session so far has
+  verified live behavior via ad-hoc scripts instead).
 - `server/adapters/` — the `SourceAdapter` abstraction (`types.ts`) plus 6 adapters:
   `commasAdapter.ts` and `meetingsAdapters.ts` (Fathom, Zoom — all MCP-backed) and
   `gmailAdapter.ts` / `calendarAdapter.ts` / `crmAdapter.ts` (API-style, no MCP). See
@@ -1427,6 +1578,19 @@ fake timers).
   getting stuck mid-pipeline due to a React state-timing bug) and its fix. Verified:
   typecheck/lint/build clean, 79 tests (+9 net), and a live 10-scenario browser walkthrough
   matching the task's own manual test list, zero console errors.
+- **Resolved disputes are read-only + Dispute AI session identity fix** (2026-08-21) — Priya
+  Nair's resolved dispute (#2390) now shows a read-only evidence record (no Add buttons,
+  clickable attachments with a lightbox/honest-fallback preview) and a "Submitted response"
+  card instead of the editable draft textarea, driven by one conditionally-rendered
+  `DisputeDetail` implementation. Separately, found and fixed a real bug where the dispute AI
+  panel rendered nothing after deleting a session and starting a new one — root cause was the
+  same React state-timing anti-pattern already fixed once this session in
+  `evidenceUpload.ts`, this time in `useChatStore.tsx`'s `createChat()` — plus added a
+  reachable "Start new session" delete affordance for dispute chats (there wasn't one before)
+  and a richer contextual empty state (structured dispute summary + 7 suggestion chips, all
+  mapped to real stub behavior). See "Resolved Disputes Are Read-Only" and "Dispute AI Session
+  Identity" above. Verified: typecheck/lint/build clean, 82 tests (+3 net), and a live
+  walkthrough of every case both tasks specified, zero console errors.
 
 # In Progress
 

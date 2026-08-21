@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ChatStoreProvider, useChatStore } from "./hooks/useChatStore";
 import type { PageContext, ViewId } from "./lib/types";
 import { DASHBOARD_CONTEXT, buildDisputeContext } from "./lib/mockData";
-import type { AIEvidenceItem } from "./lib/disputeData";
+import { DISPUTES, type AIEvidenceItem } from "./lib/disputeData";
 import { Sidebar } from "./components/shell/Sidebar";
 import { TopNav } from "./components/shell/TopNav";
 import { RightPanel } from "./components/chat/RightPanel";
@@ -27,8 +27,16 @@ function AppShell() {
   const [selectedDisputeId, setSelectedDisputeId] = useState<string>("2481");
   // Session-lifetime, per-dispute evidence added via "Add evidence" — lives here (not inside
   // DisputeDetail) so it survives the seller navigating back to the Resolution Center list and
-  // returning, since DisputeDetail fully unmounts while rcView === "list".
-  const [evidenceByDispute, setEvidenceByDispute] = useState<Record<string, AIEvidenceItem[]>>({});
+  // returning, since DisputeDetail fully unmounts while rcView === "list". Seeded from each
+  // dispute's seedEvidenceItems (e.g. Priya Nair's resolved case ships with its historical
+  // evidence already on file) so resolved disputes read as real historical records.
+  const [evidenceByDispute, setEvidenceByDispute] = useState<Record<string, AIEvidenceItem[]>>(() => {
+    const initial: Record<string, AIEvidenceItem[]> = {};
+    for (const d of DISPUTES) {
+      if (d.seedEvidenceItems.length > 0) initial[d.id] = d.seedEvidenceItems;
+    }
+    return initial;
+  });
   const [chatPageActiveId, setChatPageActiveId] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelChatId, setPanelChatId] = useState<string | null>(null);

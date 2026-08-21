@@ -23,17 +23,12 @@ export function ChatWorkspace({ chat }: { chat: Chat }) {
     : chat.context?.kind === "dashboard"
       ? DASHBOARD_SUGGESTED_CAPABILITIES
       : SUGGESTED_CAPABILITIES;
-  const greeting = isDispute ? `Investigating ${chat.context!.label}` : "How can I help you today?";
+  const greeting = isDispute ? "How can I help resolve this dispute?" : "How can I help you today?";
 
   if (isEmpty) {
     return (
       <div className="flex-1 min-h-0 flex flex-col">
-        {isDispute && (
-          <div className="px-5 pt-4">
-            <ContextChip context={chat.context!} />
-          </div>
-        )}
-        <EmptyState chat={chat} capabilities={capabilities} greeting={greeting} />
+        <EmptyState chat={chat} capabilities={capabilities} greeting={greeting} context={chat.context} />
       </div>
     );
   }

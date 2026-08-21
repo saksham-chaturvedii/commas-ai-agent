@@ -142,6 +142,10 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   const timersRef = useRef<number[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const lastPromptRef = useRef("");
+  // Mirrors `chats` for synchronous reads in createChat() — see that function's comment for
+  // why reading a value set inside a setChats() updater isn't safe to do immediately after.
+  const chatsRef = useRef<Chat[]>(chats);
+  chatsRef.current = chats;
 
   useEffect(() => {
     persist({ chats, sources, credits });
@@ -159,33 +163,30 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   const createChat = useCallback((context?: PageContext) => {
     // Reuse an already-empty chat with the same context signature instead of spawning a new
     // one — repeated "New chat" clicks (or repeated panel opens) used to pile up empty rows in
-    // history. `resultId` is set synchronously inside the updater (React runs it immediately,
-    // only the re-render is deferred), so it's safe to read right after.
-    let resultId = "";
+    // history. Computed with plain synchronous JS against chatsRef.current, then applied via a
+    // single setChats call — NOT by mutating a variable inside the setChats updater and reading
+    // it right after, which is unreliable (React doesn't guarantee that updater runs before the
+    // next line executes; this was a real bug: caller code that used the returned id
+    // immediately — e.g. RightPanel binding to it — sometimes got "" because the updater hadn't
+    // run yet, same class of bug fixed in src/lib/evidenceUpload.ts's addFiles()).
     const matchesContext = (c: Chat) => (context ? c.context?.kind === context.kind && c.context?.id === context.id : !c.context);
+    const existing = chatsRef.current.find((c) => c.messages.length === 0 && matchesContext(c));
+    if (existing) return existing.id;
 
-    setChats((prev) => {
-      const existing = prev.find((c) => c.messages.length === 0 && matchesContext(c));
-      if (existing) {
-        resultId = existing.id;
-        return prev;
-      }
-      const id = newId("chat");
-      const ts = new Date().toISOString();
-      const chat: Chat = {
-        id,
-        title: context ? context.label : "New chat",
-        createdAt: ts,
-        updatedAt: ts,
-        status: "idle",
-        enabledSources: [...DEFAULT_ENABLED_SOURCES],
-        context,
-        messages: [],
-      };
-      resultId = id;
-      return [chat, ...prev];
-    });
-    return resultId;
+    const id = newId("chat");
+    const ts = new Date().toISOString();
+    const chat: Chat = {
+      id,
+      title: context ? context.label : "New chat",
+      createdAt: ts,
+      updatedAt: ts,
+      status: "idle",
+      enabledSources: [...DEFAULT_ENABLED_SOURCES],
+      context,
+      messages: [],
+    };
+    setChats((prev) => [chat, ...prev]);
+    return id;
   }, []);
 
   const deleteChat = useCallback(

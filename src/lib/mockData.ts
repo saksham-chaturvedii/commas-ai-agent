@@ -138,10 +138,16 @@ export const DASHBOARD_SUGGESTED_CAPABILITIES: SuggestedCapability[] = [
  * Center Demo-Readiness"), each answered deterministically against the currently selected
  * dispute by server/llm/stubClient.ts. */
 export const DISPUTE_SUGGESTED_CAPABILITIES: SuggestedCapability[] = [
+  { id: "investigate", label: "Investigate this dispute", prompt: "Investigate this dispute" },
   { id: "why-open", label: "Why is this dispute open?", prompt: "Why is this dispute open?" },
-  { id: "evidence-needed", label: "What evidence do I need?", prompt: "What evidence do I need?" },
-  { id: "summarize-case", label: "Summarize this case", prompt: "Summarize this case" },
+  { id: "evidence-needed", label: "Find missing evidence", prompt: "What evidence do I need?" },
+  {
+    id: "review-comms",
+    label: "Review customer communications",
+    prompt: "Check customer communications for this dispute",
+  },
   { id: "draft-response", label: "Draft my response", prompt: "Draft my response" },
+  { id: "summarize-case", label: "Summarize this case", prompt: "Summarize this case" },
   { id: "next-step", label: "What should I do next?", prompt: "What should I do next?" },
 ];
 

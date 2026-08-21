@@ -39,6 +39,16 @@ export interface DisputeCase {
    * disputes feels like a real product with real progress — not a static, identical screenshot
    * for every row. Purely a UI seed; unrelated to the agent's own evidence-gap reasoning. */
   initialEvidenceAdded: string[];
+  /** Pre-seeded, itemized evidence (title/description/attachments) shown for cases where the
+   * Resolution Center needs to demonstrate a fully-evidenced historical record — currently
+   * only Priya Nair's resolved case. Session-added evidence (via "Add evidence") is appended
+   * alongside these in App.tsx's evidenceByDispute state; this array is just the starting
+   * point. Empty for cases with no rich seed data — those cases only show the plain
+   * Added/Not-added badges driven by initialEvidenceAdded above. */
+  seedEvidenceItems: AIEvidenceItem[];
+  /** Only set once a dispute is resolved (status !== "Needs response") — the response the
+   * seller actually submitted, shown read-only instead of the editable draft textarea. */
+  submittedResponse?: { text: string; submittedAt: string };
 }
 
 export const DISPUTES: DisputeCase[] = [
@@ -56,6 +66,7 @@ export const DISPUTES: DisputeCase[] = [
     customer: { name: "Sarah Johnson", email: "sarah.johnson@email.com", initials: "SJ" },
     product: { name: "Pro Coaching Program", transactionId: "txn_8b3f2a1c9d" },
     initialEvidenceAdded: [],
+    seedEvidenceItems: [],
   },
   {
     id: "2502",
@@ -71,6 +82,7 @@ export const DISPUTES: DisputeCase[] = [
     customer: { name: "Marcus Webb", email: "marcus.webb@email.com", initials: "MW" },
     product: { name: "1:1 Strategy Call", transactionId: "txn_7c91fe22ab" },
     initialEvidenceAdded: ["Transaction & payment details"],
+    seedEvidenceItems: [],
   },
   {
     id: "2417",
@@ -93,6 +105,7 @@ export const DISPUTES: DisputeCase[] = [
       "Terms & refund policy",
       "Customer communications",
     ],
+    seedEvidenceItems: [],
   },
   {
     id: "2455",
@@ -108,6 +121,7 @@ export const DISPUTES: DisputeCase[] = [
     customer: { name: "David Kim", email: "david.kim@email.com", initials: "DK" },
     product: { name: "Growth Accelerator Course", transactionId: "txn_3f7b90c114" },
     initialEvidenceAdded: ["Transaction & payment details"],
+    seedEvidenceItems: [],
   },
   {
     id: "2390",
@@ -130,8 +144,95 @@ export const DISPUTES: DisputeCase[] = [
       "Terms & refund policy",
       "Customer communications",
     ],
+    seedEvidenceItems: [
+      {
+        id: "seed-2390-1",
+        title: "Original transaction record",
+        record: "Confirms the $349.00 charge for the Pro Coaching Program succeeded on July 30, 2026.",
+        why: "Establishes the purchase actually completed — a prerequisite for any delivery/engagement argument.",
+        sourceType: "transaction",
+        sourceLabel: "Commas — Transaction history",
+        addedBy: "seller",
+        category: "Transaction & payment details",
+        files: [
+          { name: "transaction-receipt.pdf", type: "application/pdf", size: 61_200, mockUrl: "mock://evidence/seed/transaction-receipt.pdf" },
+        ],
+      },
+      {
+        id: "seed-2390-2",
+        title: "Portal login history",
+        record: "18 logins recorded between August 3–8, 2026, showing consistent engagement with course content after purchase.",
+        why: "Directly contradicts a \"product not received\" claim — the customer was actively using the product.",
+        sourceType: "activity",
+        sourceLabel: "Commas — Access records",
+        addedBy: "seller",
+        category: "Access & activity records",
+        files: [
+          { name: "login-history.pdf", type: "application/pdf", size: 84_500, mockUrl: "mock://evidence/seed/login-history.pdf" },
+        ],
+      },
+      {
+        id: "seed-2390-3",
+        title: "Onboarding call attendance",
+        record: "Signed attendance record and a screenshot confirming Priya joined and participated in the August 4 onboarding call.",
+        why: "Independent, seller-uploaded corroboration of engagement beyond the platform's own login logs.",
+        sourceType: "communication",
+        sourceLabel: "Added by you — Customer communications",
+        addedBy: "seller",
+        category: "Customer communications",
+        files: [
+          {
+            name: "call-attendance-signed.pdf",
+            type: "application/pdf",
+            size: 47_800,
+            mockUrl: "mock://evidence/seed/call-attendance-signed.pdf",
+          },
+          {
+            name: "attendance-screenshot.png",
+            type: "image/png",
+            size: 212_300,
+            mockUrl: mockImageDataUri("attendance-screenshot.png"),
+          },
+        ],
+      },
+      {
+        id: "seed-2390-4",
+        title: "Program listing at time of purchase",
+        record: "Screenshot of the Pro Coaching Program offer page as shown to Priya at checkout on July 30, 2026.",
+        why: "Shows what was actually promised, for comparison against what was delivered.",
+        sourceType: "product",
+        sourceLabel: "Added by you — Product description",
+        addedBy: "seller",
+        category: "Product description & offer details",
+        files: [
+          { name: "listing-screenshot.png", type: "image/png", size: 168_900, mockUrl: mockImageDataUri("listing-screenshot.png") },
+        ],
+      },
+    ],
+    submittedResponse: {
+      text:
+        "Priya Nair engaged extensively with the Pro Coaching Program after purchase — 18 portal logins between " +
+        "August 3–8 and confirmed attendance at the August 4 onboarding call. This usage pattern directly " +
+        "contradicts a \"product not received\" claim. We're submitting the attached login history and signed " +
+        "attendance record as evidence of delivery and engagement, alongside the original transaction record and " +
+        "the product listing shown at time of purchase.",
+      submittedAt: "August 8, 2026",
+    },
   },
 ];
+
+/** Inline SVG placeholder used as the mockUrl for pre-seeded image evidence (no real file
+ * bytes exist for historical/seed data — see docs/active-context.md's Evidence File Upload
+ * limitations). Honestly labeled as a mock, still a real, clickable/previewable image. */
+function mockImageDataUri(label: string): string {
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="320">` +
+    `<rect width="480" height="320" fill="#e5e7eb"/>` +
+    `<text x="50%" y="46%" font-family="sans-serif" font-size="15" fill="#6b7280" text-anchor="middle">Mock evidence preview</text>` +
+    `<text x="50%" y="56%" font-family="sans-serif" font-size="13" fill="#9ca3af" text-anchor="middle">${label}</text>` +
+    `</svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
 
 export function getDispute(id: string): DisputeCase | undefined {
   return DISPUTES.find((d) => d.id === id);
