@@ -127,6 +127,11 @@ interface ChatStoreValue {
   toggleChatSource: (chatId: string, sourceId: SourceId) => void;
   connectSource: (sourceId: SourceId) => void;
   disconnectSource: (sourceId: SourceId) => void;
+  /** Dispute ids whose "mark response ready" write action was approved and executed this
+   * session — lets the dispute page reflect the agent's action instead of leaving the
+   * approve flow with no visible effect (PRODUCT_READINESS_AUDIT.md P1-10). Session-only,
+   * mirroring the backend's own in-memory flag. */
+  markedReadyDisputeIds: string[];
   /** Mock purchase — increases totalCredits only, never touches usedCredits (see
    * CreditsState's doc comment for why that's what makes the "271/300 → +50 → 321/350"
    * edge case work correctly). */
@@ -162,6 +167,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   const [runSteps, setRunSteps] = useState<ProgressStep[]>([]);
   const [visibleStepIds, setVisibleStepIds] = useState<string[]>([]);
   const [pendingApproval, setPendingApproval] = useState<PendingApprovalState | null>(null);
+  const [markedReadyDisputeIds, setMarkedReadyDisputeIds] = useState<string[]>([]);
 
   const cancelledRef = useRef(false);
   const timersRef = useRef<number[]>([]);
@@ -436,6 +442,17 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
             error: { code: "server_unavailable", message: "The AI agent is temporarily unreachable — that action wasn't taken. Try again in a moment." },
           };
         }
+        // Surface the executed write action to the dispute page (audit P1-10): only after a
+        // real, successful execution — declines and failed runs leave the page untouched.
+        if (
+          decision === "approve" &&
+          toolName === "commas_mark_dispute_response_ready" &&
+          typeof input.dispute_id === "string" &&
+          plan.toolSummary.some((t) => t.ok)
+        ) {
+          const disputeId = input.dispute_id;
+          setMarkedReadyDisputeIds((prev) => (prev.includes(disputeId) ? prev : [...prev, disputeId]));
+        }
         applyPlan(chatId, plan);
       })();
     },
@@ -512,6 +529,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       toggleChatSource,
       connectSource,
       disconnectSource,
+      markedReadyDisputeIds,
       addCredits,
       setRemainingCreditsForDemo,
       resetDemo,
@@ -534,6 +552,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       toggleChatSource,
       connectSource,
       disconnectSource,
+      markedReadyDisputeIds,
       addCredits,
       setRemainingCreditsForDemo,
       resetDemo,

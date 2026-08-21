@@ -8,7 +8,8 @@ import { getDispute } from "./disputeData";
  * $499 Pro Coaching Program, purchased Aug 2 2026, disputed Aug 9, evidence due Aug 13.
  *
  * Source list per Commas CPO (external OAuth-style integrations for off-platform
- * fulfillment): Google Calendar, Zoom, Fathom, Gmail, CRM. Do not invent more.
+ * fulfillment): Google Calendar, Zoom, Fathom, Gmail, GoHighLevel (GHL — internal id "crm").
+ * Do not invent more.
  */
 
 export const SOURCES: SourceInfo[] = [
@@ -45,8 +46,8 @@ export const SOURCES: SourceInfo[] = [
   },
   {
     id: "crm",
-    name: "CRM",
-    description: "Your CRM's contact records and deal history.",
+    name: "GoHighLevel",
+    description: "Your GoHighLevel contact records and deal history.",
     connection: "not_connected",
   },
 ];
@@ -120,10 +121,12 @@ export const SUGGESTED_CAPABILITIES: SuggestedCapability[] = [
 ];
 
 export const DASHBOARD_SUGGESTED_CAPABILITIES: SuggestedCapability[] = [
+  // Reworded from "why revenue dropped" — the Dashboard itself shows revenue UP 12%, so the
+  // old chip contradicted the page it sits on (PRODUCT_READINESS_AUDIT.md P0-5).
   {
-    id: "revenue-drop",
-    label: "Help me understand why revenue dropped this month",
-    prompt: "Help me understand why revenue dropped this month",
+    id: "revenue-drivers",
+    label: "What's driving my revenue this month?",
+    prompt: "What's driving my revenue this month?",
   },
   { id: "sales-summary", label: "Summarize my sales", prompt: "Summarize my sales this month" },
   { id: "analyze-disputes", label: "Analyze my disputes", prompt: "Analyze my disputes" },
@@ -202,8 +205,8 @@ export const SEED_CHATS: Chat[] = [
         text:
           "This month you've done **$18,420** across 62 transactions — up 12% from last month. " +
           "**Pro Coaching Program** is your top seller ($9,800), followed by **1:1 Strategy Call** " +
-          "($4,250). 3 refunds totaling $960 were issued, and 1 dispute is currently open " +
-          "(#2481, evidence due August 13).",
+          "($4,250). 3 refunds totaling $960 were issued, and 4 disputes are currently open — " +
+          "**#2481** is the most urgent (evidence due August 13).",
         ts: hoursAgo(3),
         toolSummary: [
           { sourceId: "commas", label: "Transactions", ok: true },

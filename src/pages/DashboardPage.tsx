@@ -10,8 +10,10 @@ import { OverviewCard, OverviewEmptyCard } from "../components/dashboard/Overvie
  * existing design primitives (content-card, btn-secondary, filter-pill's visual language).
  *
  * Numbers are coherent with the rest of the prototype's mock world rather than a literal
- * fresh-account zero-state: Disputed payments / Dispute activity reflect the same Dispute
- * #2481 ($499) that Resolution Center shows, so the two pages tell one consistent story.
+ * fresh-account zero-state: Disputed payments reflects the 4 open disputes Resolution Center
+ * shows ($499 + $129 + $899 + $249 = $1,776), so the two pages tell one consistent story —
+ * and the mock backend's month summary (server/mcp/mockCommasServer.ts MONTH_SUMMARY) carries
+ * the same figures so agent answers match too.
  * Two cards (Top payment methods, Credit score distribution) reproduce production's genuine
  * empty-state treatment verbatim, since this prototype has no backing mock data for either.
  */
@@ -76,9 +78,9 @@ export function DashboardPage() {
         />
         <OverviewCard
           title="Disputed payments"
-          value="$499"
-          subtitle="1 open dispute"
-          points={[0, 0, 0, 0, 0, 0.3, 0.28]}
+          value="$1,776"
+          subtitle="4 open disputes"
+          points={[0, 0.1, 0.1, 0.2, 0.2, 0.35, 0.3]}
           xLabels={XLABELS}
         />
 

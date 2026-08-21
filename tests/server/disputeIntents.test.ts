@@ -85,6 +85,30 @@ describe("dispute-intent demo questions (deterministic, per-case)", () => {
     });
   });
 
+  describe("communications intent (audit P1-9)", () => {
+    it("pulls live Gmail threads and answers from the case's authored communications summary", async () => {
+      const commAdapters = [...adapters]; // commas only in this suite — gmail not enabled
+      const r = await runAgentTurn({
+        prompt: "Review customer communications",
+        enabledSources: ["commas"],
+        context: contextFor("2481", "Dispute #2481 — Sarah Johnson"),
+        conversationHistory: [],
+        llmClient,
+        adapters: commAdapters,
+        registry,
+      });
+      // Gmail isn't enabled for this chat — the reply says so explicitly and still gives the
+      // authored per-case summary, never the generic fallback.
+      expect(r.answer).toContain("Gmail isn't enabled for this chat");
+      expect(r.answer).toContain("Got it, thanks! I'm in now.");
+    });
+
+    it("names the absence of correspondence for the missing-evidence case (#2502)", async () => {
+      const r = await ask("Check customer communications for this dispute", "2502");
+      expect(r.answer.toLowerCase()).toContain("don't see any email threads with marcus");
+    });
+  });
+
   describe("case #2417 — Elena Cruz (evidence ready)", () => {
     it("evidence: confirms nothing is missing", async () => {
       const r = await ask("What evidence do I need?", "2417");

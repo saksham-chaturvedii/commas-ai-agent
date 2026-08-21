@@ -1,4 +1,4 @@
-import { MessageSquarePlus, Trash2 } from "lucide-react";
+import { MessageSquarePlus, Trash2, Gavel } from "lucide-react";
 import { useChatStore } from "../../hooks/useChatStore";
 
 function groupLabel(iso: string): "Today" | "Yesterday" | "Earlier" {
@@ -23,9 +23,12 @@ export function ChatHistoryList({
 
   // An empty chat only stays visible while it's the active one — createChat() already
   // dedupes so there's at most one, but this keeps a stale empty chat from lingering in the
-  // list if selection moves elsewhere.
+  // list if selection moves elsewhere. Context (dispute/dashboard) chats stay out of the
+  // general history, EXCEPT the currently active one: opening a dispute chat "in full Chat
+  // view" must show a highlighted row for the conversation on screen, or it reads as a chat
+  // that exists nowhere (PRODUCT_READINESS_AUDIT.md P1-11).
   const standaloneChats = chats
-    .filter((c) => !c.context && (c.messages.length > 0 || c.id === activeChatId))
+    .filter((c) => (c.messages.length > 0 || c.id === activeChatId) && (!c.context || c.id === activeChatId))
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
   const groups: Record<string, typeof standaloneChats> = { Today: [], Yesterday: [], Earlier: [] };
@@ -62,13 +65,16 @@ export function ChatHistoryList({
                     type="button"
                     onClick={() => onSelect(chat.id)}
                     className={
-                      "w-full text-left px-2.5 py-2 rounded-lg text-[13px] truncate pr-7 transition-colors " +
+                      "w-full flex items-center gap-1.5 text-left px-2.5 py-2 rounded-lg text-[13px] pr-7 transition-colors " +
                       (activeChatId === chat.id
                         ? "bg-black/[0.06] text-[var(--color-text-primary)] font-medium"
                         : "text-[var(--color-text-label)] hover:bg-black/[0.03]")
                     }
                   >
-                    {chat.title || "New chat"}
+                    {chat.context?.kind === "dispute" && (
+                      <Gavel size={13} strokeWidth={1.75} className="shrink-0 text-[var(--color-agent-accent)]" />
+                    )}
+                    <span className="truncate">{chat.title || "New chat"}</span>
                   </button>
                   <button
                     type="button"

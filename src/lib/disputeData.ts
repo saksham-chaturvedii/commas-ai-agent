@@ -105,7 +105,48 @@ export const DISPUTES: DisputeCase[] = [
       "Terms & refund policy",
       "Customer communications",
     ],
-    seedEvidenceItems: [],
+    // Evidence-ready showcase: the checklist isn't just green badges — the items themselves
+    // are on file and inspectable, same as the resolved case (audit P1-7).
+    seedEvidenceItems: [
+      {
+        id: "seed-2417-1",
+        title: "Duplicate charge records",
+        record:
+          "Both charges for the Elite Mentorship Package on August 8, 2026 — txn_5a2d81ffec and its duplicate, " +
+          "9 seconds apart, same cart and payment method.",
+        why: "Proves this was a checkout retry, not two intentional purchases.",
+        sourceType: "transaction",
+        sourceLabel: "Commas — Transaction history",
+        addedBy: "seller",
+        category: "Transaction & payment details",
+        files: [
+          { name: "charge-1-receipt.pdf", type: "application/pdf", size: 58_400, mockUrl: "mock://evidence/seed/charge-1-receipt.pdf" },
+          { name: "charge-2-receipt.pdf", type: "application/pdf", size: 58_900, mockUrl: "mock://evidence/seed/charge-2-receipt.pdf" },
+        ],
+      },
+      {
+        id: "seed-2417-2",
+        title: "Checkout retry log",
+        record: "Server log showing the payment form was resubmitted after a timeout at 11:47:02, producing the second charge.",
+        why: "Explains the mechanism behind the duplicate — corroborates the two receipts.",
+        sourceType: "activity",
+        sourceLabel: "Commas — Checkout logs",
+        addedBy: "seller",
+        category: "Access & activity records",
+        files: [{ name: "checkout-retry-log.pdf", type: "application/pdf", size: 41_200, mockUrl: "mock://evidence/seed/checkout-retry-log.pdf" }],
+      },
+      {
+        id: "seed-2417-3",
+        title: "Elena's support email",
+        record: "Elena's own August 10 email flagging the double charge, with both receipts attached — sent before she filed the dispute.",
+        why: "Shows good-faith customer contact and confirms the seller was already resolving it.",
+        sourceType: "communication",
+        sourceLabel: "Added by you — Customer communications",
+        addedBy: "seller",
+        category: "Customer communications",
+        files: [{ name: "elena-support-email.pdf", type: "application/pdf", size: 33_700, mockUrl: "mock://evidence/seed/elena-support-email.pdf" }],
+      },
+    ],
   },
   {
     id: "2455",
@@ -121,7 +162,21 @@ export const DISPUTES: DisputeCase[] = [
     customer: { name: "David Kim", email: "david.kim@email.com", initials: "DK" },
     product: { name: "Growth Accelerator Course", transactionId: "txn_3f7b90c114" },
     initialEvidenceAdded: ["Transaction & payment details"],
-    seedEvidenceItems: [],
+    // Deliberately sparse — one transaction receipt and nothing else, matching this case's
+    // "inconclusive evidence" story (audit P1-7).
+    seedEvidenceItems: [
+      {
+        id: "seed-2455-1",
+        title: "Transaction receipt",
+        record: "Confirms the $249.00 charge for the Growth Accelerator Course succeeded on August 14, 2026.",
+        why: "Proves the purchase completed — but delivery/engagement evidence is still missing for this case.",
+        sourceType: "transaction",
+        sourceLabel: "Commas — Transaction history",
+        addedBy: "seller",
+        category: "Transaction & payment details",
+        files: [{ name: "transaction-receipt.pdf", type: "application/pdf", size: 55_100, mockUrl: "mock://evidence/seed/kim-transaction-receipt.pdf" }],
+      },
+    ],
   },
   {
     id: "2390",

@@ -17,6 +17,7 @@ import { CardTitle } from "./CardTitle";
 import { AddEvidenceModal } from "./AddEvidenceModal";
 import { evidenceCategories, getDispute, type AIEvidenceItem, type EvidenceFileMeta } from "../../lib/disputeData";
 import { formatFileSize } from "../../lib/evidenceUpload";
+import { useChatStore } from "../../hooks/useChatStore";
 
 /**
  * Dispute Detail page, ported from commas-ai-copilot and evolved: the old prototype's inline
@@ -226,6 +227,8 @@ export function DisputeDetail({
 }) {
   const [response, setResponse] = useState("");
   const [justSaved, setJustSaved] = useState(false);
+  const { markedReadyDisputeIds } = useChatStore();
+  const markedReadyByAI = markedReadyDisputeIds.includes(disputeId);
   const dispute = getDispute(disputeId);
   // "Needs response" is the only non-terminal status this prototype's data models today;
   // written as a negation (rather than === "Won") so a future "Lost" status is read-only too
@@ -314,6 +317,7 @@ export function DisputeDetail({
             <div className="content-card" style={{ padding: 24, gap: 0 }}>
               <div className="flex items-center gap-2.5 mb-3">
                 <CardTitle>Your response</CardTitle>
+                {markedReadyByAI && <Badge variant="success">Marked ready by AI</Badge>}
               </div>
               <div className="textarea-shell">
                 <textarea
