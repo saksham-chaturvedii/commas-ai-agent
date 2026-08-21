@@ -31,7 +31,9 @@ const CREDIT_COST_PER_MESSAGE = 1;
 /** How many prior turns to send the agent for conversation memory — capped so a long chat's
  * payload doesn't grow unbounded (server/app.ts enforces the same cap defensively). */
 const HISTORY_TURN_LIMIT = 20;
-const STORAGE_KEY = "commas-ai-agent:v1";
+// v2: seed-data/copy fixes from PRODUCT_READINESS_AUDIT.md P0-2 (a v1 store would keep serving
+// the old contradictory "62 transactions / 1 open dispute" seed chats forever — P2-10).
+const STORAGE_KEY = "commas-ai-agent:v2";
 
 interface PersistedShape {
   chats: Chat[];
@@ -48,6 +50,29 @@ function isValidCreditsShape(c: unknown): c is CreditsState {
   );
 }
 
+/** A chat persisted mid-run has a user message the agent never answered (the page was
+ * reloaded before the response landed). Reconcile it on load: back to idle, with a quiet
+ * note so the conversation doesn't look ignored (PRODUCT_READINESS_AUDIT.md P1-8). */
+function reconcileInterruptedRuns(chats: Chat[]): Chat[] {
+  return chats.map((c) =>
+    c.status === "running"
+      ? {
+          ...c,
+          status: "idle" as const,
+          messages: [
+            ...c.messages,
+            {
+              id: newId("m"),
+              role: "assistant" as const,
+              text: "This response was interrupted — ask again and I'll pick it up.",
+              ts: new Date().toISOString(),
+            },
+          ],
+        }
+      : c,
+  );
+}
+
 function loadPersisted(): PersistedShape | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -55,7 +80,7 @@ function loadPersisted(): PersistedShape | null {
     const parsed = JSON.parse(raw) as Partial<PersistedShape>;
     if (!Array.isArray(parsed.chats)) return null;
     return {
-      chats: parsed.chats,
+      chats: reconcileInterruptedRuns(parsed.chats),
       sources: Array.isArray(parsed.sources) ? parsed.sources : SOURCES,
       // Falls back to a fresh 300/0 balance if localStorage still holds the old
       // {balance, startingBalance} shape from before the credit-system rebuild.
@@ -312,6 +337,12 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       // charge a credit) once the workspace is out of credits.
       if (remainingCredits(credits) <= 0) return;
 
+      // One run at a time. The composer already disables itself while another chat is
+      // running, but suggestion chips call sendMessage directly — without this guard a chip
+      // click would clear the first run's timers and strand that chat in "running" forever
+      // (PRODUCT_READINESS_AUDIT.md P1-6).
+      if (runChatId !== null && runChatId !== chatId) return;
+
       const userMessage: ChatMessage = { id: newId("m"), role: "user", text: trimmed, ts: new Date().toISOString() };
       const history = historyFor(chat);
       lastPromptRef.current = trimmed;
@@ -362,14 +393,14 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
             toolSummary: [],
             error: {
               code: "server_unavailable",
-              message: "Couldn't reach the agent — check that the backend is running (npm run dev:server).",
+              message: "The AI agent is temporarily unreachable. Check your connection and try again.",
             },
           };
         }
         applyPlan(chatId, plan);
       })();
     },
-    [chats, credits, clearTimers, applyPlan],
+    [chats, credits, runChatId, clearTimers, applyPlan],
   );
 
   const resolveApproval = useCallback(
@@ -402,7 +433,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
             steps: [],
             answer: "",
             toolSummary: [],
-            error: { code: "server_unavailable", message: "Couldn't reach the agent to confirm that action." },
+            error: { code: "server_unavailable", message: "The AI agent is temporarily unreachable — that action wasn't taken. Try again in a moment." },
           };
         }
         applyPlan(chatId, plan);

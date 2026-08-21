@@ -162,7 +162,10 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
       await vi.advanceTimersByTimeAsync(2000);
     });
 
-    expect(screen.getByText(/Couldn't reach the agent/)).toBeInTheDocument();
+    // Product-voice copy — must never leak dev instructions like "npm run dev:server"
+    // (PRODUCT_READINESS_AUDIT.md P1-4).
+    expect(screen.getByText(/temporarily unreachable/)).toBeInTheDocument();
+    expect(screen.queryByText(/npm run/)).not.toBeInTheDocument();
   });
 
   it("renders an approval card for a write action, and only sends it after Approve", async () => {
@@ -209,6 +212,82 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
     });
 
     expect(screen.getByText("Done — marked ready.")).toBeInTheDocument();
+  });
+
+  it("refuses to start a second run while another chat's run is in flight (P1-6)", async () => {
+    // A fetch that never resolves keeps the first chat's run active for the whole test.
+    const hangingFetch = vi.fn().mockReturnValue(new Promise(() => {}));
+    vi.stubGlobal("fetch", hangingFetch);
+
+    function TwoChatHarness() {
+      const { createChat, chats, sendMessage } = useChatStore();
+      const [ids, setIds] = useState<string[]>([]);
+      useEffect(() => {
+        const a = createChat();
+        const b = createChat({ kind: "dispute", id: "2481", label: "Dispute #2481" });
+        setIds([a, b]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []);
+      if (ids.length < 2) return null;
+      return (
+        <div>
+          <button type="button" onClick={() => sendMessage(ids[0], "first run")}>
+            send-a
+          </button>
+          <button type="button" onClick={() => sendMessage(ids[1], "second run")}>
+            send-b
+          </button>
+          <div data-testid="chat-b-messages">{chats.find((c) => c.id === ids[1])?.messages.length ?? -1}</div>
+        </div>
+      );
+    }
+
+    render(
+      <ChatStoreProvider>
+        <TwoChatHarness />
+      </ChatStoreProvider>,
+    );
+    await act(async () => {});
+    fireEvent.click(screen.getByText("send-a"));
+    expect(hangingFetch).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText("send-b")); // must be refused, not clobber run A
+    expect(hangingFetch).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("chat-b-messages").textContent).toBe("0");
+  });
+
+  it("reconciles a chat persisted mid-run back to idle with an interruption notice (P1-8)", () => {
+    const interrupted: Chat = {
+      id: "chat-interrupted",
+      title: "Interrupted chat",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: "running",
+      enabledSources: ["commas"],
+      messages: [{ id: "m-user", role: "user", text: "Summarize my sales", ts: new Date().toISOString() }],
+    };
+    localStorage.setItem(
+      "commas-ai-agent:v2",
+      JSON.stringify({ chats: [interrupted], sources: [], credits: { totalCredits: 300, usedCredits: 0 } }),
+    );
+
+    function ReadHarness() {
+      const { chats } = useChatStore();
+      const chat = chats.find((c) => c.id === "chat-interrupted");
+      return (
+        <div>
+          <div data-testid="status">{chat?.status}</div>
+          <div data-testid="last-message">{chat?.messages[chat.messages.length - 1]?.text}</div>
+        </div>
+      );
+    }
+    render(
+      <ChatStoreProvider>
+        <ReadHarness />
+      </ChatStoreProvider>,
+    );
+    expect(screen.getByTestId("status").textContent).toBe("idle");
+    expect(screen.getByTestId("last-message").textContent).toContain("interrupted");
   });
 
   it("persists chats to localStorage and restores them on a fresh provider mount (reload simulation)", async () => {

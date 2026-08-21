@@ -46,8 +46,12 @@ function AppShell() {
     if (context) {
       const existing = chats.find((c) => c.context?.kind === context.kind && c.context?.id === context.id);
       targetId = existing ? existing.id : createChat(context);
-    } else if (!targetId) {
-      targetId = createChat();
+    } else {
+      // Context-less open (e.g. the floating button on the RC list): never resurface a stale
+      // dispute/dashboard-context chat from a previous page — reuse/create a general chat
+      // instead (PRODUCT_READINESS_AUDIT.md P1-3).
+      const previous = targetId ? chats.find((c) => c.id === targetId) : undefined;
+      if (!targetId || previous?.context) targetId = createChat();
     }
     setPanelChatId(targetId);
     setPanelOpen(true);
@@ -88,6 +92,11 @@ function AppShell() {
         <Sidebar
           active={view}
           onNavigate={(v) => {
+            // Close the AI panel when changing pages — its chat is bound to the page it was
+            // opened from, and carrying a "Dispute #2481" panel onto the Dashboard presents
+            // stale context as current (PRODUCT_READINESS_AUDIT.md P1-1). Reopening from the
+            // new page rebinds it via openPanel's context logic.
+            if (v !== view) setPanelOpen(false);
             setView(v);
             if (v === "resolution-center") setRcView("list");
           }}
@@ -102,6 +111,7 @@ function AppShell() {
                   onOpenDispute={(id) => {
                     setSelectedDisputeId(id);
                     setRcView("detail");
+                    setPanelOpen(false); // same stale-context rule as sidebar navigation (P1-1)
                   }}
                 />
               )}
@@ -111,7 +121,10 @@ function AppShell() {
                   disputeId={selectedDisputeId}
                   evidenceItems={evidenceByDispute[selectedDisputeId] ?? []}
                   onAddEvidence={(item) => addEvidenceItem(selectedDisputeId, item)}
-                  onBack={() => setRcView("list")}
+                  onBack={() => {
+                    setRcView("list");
+                    setPanelOpen(false); // same stale-context rule as sidebar navigation (P1-1)
+                  }}
                   onInvestigate={() => openPanel(buildDisputeContext(selectedDisputeId))}
                 />
               )}

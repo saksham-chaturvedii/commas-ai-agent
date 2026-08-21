@@ -47,11 +47,14 @@ export function EmptyState({
   greeting?: string;
   context?: PageContext;
 }) {
-  const { sources, sendMessage } = useChatStore();
+  const { sources, sendMessage, credits, runChatId } = useChatStore();
   const [dismissed, setDismissed] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
 
   const notConnected = sources.filter((s) => s.connection === "not_connected");
+  // Mirror the composer's gating for the chips (audit P1-5): out of credits, or another
+  // chat's run is in flight.
+  const chipsDisabled = credits.totalCredits - credits.usedCredits <= 0 || (runChatId !== null && runChatId !== chat.id);
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center gap-6 px-6 py-10">
@@ -65,7 +68,11 @@ export function EmptyState({
 
       <ChatComposer chat={chat} variant="hero" />
 
-      <SuggestedCapabilities capabilities={capabilities} onSelect={(prompt) => sendMessage(chat.id, prompt)} />
+      <SuggestedCapabilities
+        capabilities={capabilities}
+        disabled={chipsDisabled}
+        onSelect={(prompt) => sendMessage(chat.id, prompt)}
+      />
 
       {!dismissed && notConnected.length > 0 && (
         <div className="flex items-center gap-3 max-w-[560px] w-full px-4 py-2.5 rounded-xl border border-[var(--color-border-card)] bg-white">
