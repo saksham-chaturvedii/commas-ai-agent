@@ -14,5 +14,5 @@
     "noUnusedParameters": false,
     "resolveJsonModule": true
   },
-  "include": ["server"]
+  "include": ["server", "api", "middleware.ts"]
 }

@@ -31,3 +31,30 @@ commas-ai-agent/
 ├── tests/
 └── public/
 ```
+
+## Deployment (Vercel)
+
+The frontend (`vite build` → `dist/`) and the backend (`server/app.ts`, the same Hono app used
+in local dev and in tests) both deploy from this one repo — no separate backend host needed.
+
+- **`vercel.json`** points Vercel at `npm run build` / `dist` for the static frontend.
+- **`api/[...path].ts`** is the serverless entry point: a catch-all function that hands every
+  `/api/*` request to the real Hono app (`createApp()`, memoized per warm instance) via
+  `hono/vercel`'s `handle()` — the exact same routes (`/api/health`, `/api/agent/run`,
+  `/api/agent/approve`, `/api/agent/stream`) as `server/index.ts` serves locally.
+- **`middleware.ts`** gates the whole deployment behind a single shared password (HTTP Basic
+  Auth, checked against the `SITE_PASSWORD` env var) — see the comment in that file.
+- **Environment variables** (set in the Vercel project, never committed — see `.env.example`):
+  - `SITE_PASSWORD` — required to password-protect the deployment.
+  - `ANTHROPIC_API_KEY` — optional and **not free** (pay-per-token, no free tier). Without it,
+    the agent runs on `StubLlmClient`: the same real tool calls, multi-source investigation, and
+    approval flow, with deterministic (not model-generated) reasoning text. Set this only if you
+    have your own key and accept the cost.
+  - `COMMAS_MCP_MODE` (defaults to `mock`, safe to leave unset).
+
+**Known limitation:** `SessionStore` and `PendingApprovalStore` (server/agent/sessions,
+server/agent/approvals) are in-memory, scoped to one warm serverless instance — standard for
+this prototype's architecture, but on Vercel a cold start or a request routed to a different
+instance starts that memory fresh. In practice this is rarely noticeable for a single-visitor
+demo (a warm instance easily outlives the seconds between "here's an approval card" and
+clicking Approve), but it isn't the same durability guarantee a long-running server gives.

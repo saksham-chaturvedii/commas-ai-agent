@@ -4,6 +4,9 @@
   "version": "0.0.1",
   "type": "module",
   "description": "Prototype of the technical agent system (LLM + MCP + connectors + chat) behind the Commas AI Evidence Copilot concept.",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "vite",
     "dev:server": "tsx watch server/index.ts",
