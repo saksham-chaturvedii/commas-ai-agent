@@ -377,6 +377,7 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
     const interrupted: Chat = {
       id: "chat-interrupted",
       title: "Interrupted chat",
+      type: "global",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       status: "running",
@@ -384,7 +385,7 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
       messages: [{ id: "m-user", role: "user", text: "Summarize my sales", ts: new Date().toISOString() }],
     };
     localStorage.setItem(
-      "commas-ai-agent:v2",
+      "commas-ai-agent:v3",
       JSON.stringify({ chats: [interrupted], sources: [], credits: { totalCredits: 300, usedCredits: 0 } }),
     );
 

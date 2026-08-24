@@ -150,21 +150,16 @@ export const DASHBOARD_SUGGESTED_CAPABILITIES: SuggestedCapability[] = [
   },
 ];
 
-/** Demo-script prompts for the Resolution Center chat (docs/active-context.md — "Resolution
- * Center Demo-Readiness"), each answered deterministically against the currently selected
- * dispute by server/llm/stubClient.ts. */
+/** Starter actions shown when a dispute-scoped chat has no investigation yet (0 messages) — the
+ * unified conversation model's "no existing investigation" empty state
+ * (docs/AI_ASSISTANT_IMPLEMENTATION_STATUS.md's current phase). Each is answered deterministically
+ * against the currently selected dispute by server/llm/stubClient.ts. */
 export const DISPUTE_SUGGESTED_CAPABILITIES: SuggestedCapability[] = [
   { id: "investigate", label: "Investigate this dispute", prompt: "Investigate this dispute" },
-  { id: "why-open", label: "Why is this dispute open?", prompt: "Why is this dispute open?" },
-  { id: "evidence-needed", label: "Find missing evidence", prompt: "What evidence do I need?" },
-  {
-    id: "review-comms",
-    label: "Review customer communications",
-    prompt: "Check customer communications for this dispute",
-  },
-  { id: "draft-response", label: "Draft my response", prompt: "Draft my response" },
-  { id: "summarize-case", label: "Summarize this case", prompt: "Summarize this case" },
-  { id: "next-step", label: "What should I do next?", prompt: "What should I do next?" },
+  { id: "find-evidence", label: "Find relevant evidence", prompt: "Find relevant evidence for this dispute" },
+  { id: "check-apps", label: "Check connected apps", prompt: "Check my connected apps for information about this dispute" },
+  { id: "customer-history", label: "Analyze customer history", prompt: "Analyze this customer's history" },
+  { id: "draft-response", label: "Draft a response", prompt: "Draft a response" },
 ];
 
 const now = Date.now();
@@ -175,6 +170,7 @@ export const SEED_CHATS: Chat[] = [
   {
     id: "chat-seed-1",
     title: "Which discount codes get used the most?",
+    type: "global",
     createdAt: hoursAgo(26),
     updatedAt: hoursAgo(26),
     status: "idle",
@@ -201,6 +197,7 @@ export const SEED_CHATS: Chat[] = [
   {
     id: "chat-seed-2",
     title: "Sales summary — last 30 days",
+    type: "global",
     createdAt: hoursAgo(3),
     updatedAt: hoursAgo(3),
     status: "idle",

@@ -172,14 +172,29 @@ export interface PageContext {
 
 export type ChatStatus = "idle" | "running" | "error";
 
+/** One unified conversation model backs both the global AI chat and dispute-scoped
+ * investigations — there is no separate "dispute chat" store (useChatStore's single `chats`
+ * array). `type` makes that distinction explicit instead of leaving callers to infer it from
+ * `context?.kind` — "global" for a context-less or dashboard-context chat, "dispute" only for
+ * one scoped to a specific dispute investigation. */
+export type ChatType = "global" | "dispute";
+
 export interface Chat {
   id: string;
   title: string;
+  /** "global" | "dispute" — see `ChatType`. Set once at creation from the `PageContext` passed
+   * to `createChat`; a chat never changes type after it exists. */
+  type: ChatType;
   createdAt: string;
   updatedAt: string;
   status: ChatStatus;
   enabledSources: SourceId[];
   context?: PageContext;
+  /** The dispute this conversation investigates, if any — mirrors `context.id` when
+   * `type === "dispute"`, undefined otherwise. Surfaced as its own field (rather than requiring
+   * every caller to unpack `context`) since "associated dispute, if any" is part of this
+   * conversation model's own required metadata, not just an implementation detail of context. */
+  disputeId?: string;
   messages: ChatMessage[];
 }
 

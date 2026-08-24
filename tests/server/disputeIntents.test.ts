@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, beforeAll } from "vitest";
 import { CommasAdapter } from "../../server/adapters/commasAdapter.js";
+import { CrmAdapter } from "../../server/adapters/crmAdapter.js";
 import type { SourceAdapter } from "../../server/adapters/types.js";
 import { buildToolRegistry, type RegisteredTool } from "../../server/agent/registry.js";
 import { runAgentTurn } from "../../server/agent/runtime.js";
@@ -106,6 +107,67 @@ describe("dispute-intent demo questions (deterministic, per-case)", () => {
     it("names the absence of correspondence for the missing-evidence case (#2502)", async () => {
       const r = await ask("Check customer communications for this dispute", "2502");
       expect(r.answer.toLowerCase()).toContain("don't see any email threads with marcus");
+    });
+  });
+
+  describe("history intent — the dispute chat's \"Analyze customer history\" starter action", () => {
+    it("declines honestly when GoHighLevel isn't connected for this chat", async () => {
+      const r = await ask("Analyze this customer's history", "2481");
+      expect(r.answer).toContain("GoHighLevel isn't connected for this chat");
+    });
+
+    // Unlike `contextFor` (used everywhere else in this file), these two tests need a full
+    // dispute context with `.dispute.customerEmail` populated — the same shape
+    // src/lib/mockData.ts's `buildDisputeContext` builds in the real app — since the history
+    // intent's live GoHighLevel lookup keys off that email, not just the dispute id.
+    const richContext = (id: string, label: string, customerEmail: string, customerName: string): PageContext => ({
+      kind: "dispute",
+      id,
+      label,
+      dispute: {
+        customerName,
+        customerEmail,
+        transactionId: "txn_test",
+        amountCents: 0,
+        reason: "product_not_received",
+        openedAt: "2026-08-01",
+        evidenceDueAt: "2026-08-15",
+        evidenceStatus: "not_started",
+        status: "Needs response",
+        evidenceSummary: [],
+      },
+    });
+
+    it("pulls the live GoHighLevel contact and reports real pipeline/account history", async () => {
+      const crmAdapters = [...adapters, new CrmAdapter()];
+      const crmRegistry = await buildToolRegistry(crmAdapters);
+      const r = await runAgentTurn({
+        prompt: "Analyze this customer's history",
+        enabledSources: ["commas", "crm"],
+        context: richContext("2481", "Dispute #2481 — Sarah Johnson", "sarah.johnson@email.com", "Sarah Johnson"),
+        conversationHistory: [],
+        llmClient,
+        adapters: crmAdapters,
+        registry: crmRegistry,
+      });
+      expect(r.answer).toContain("Sarah Johnson");
+      expect(r.answer.toLowerCase()).toContain("pipeline stage");
+      expect(r.answer).toContain("Pro Coaching Program");
+    });
+
+    it("reports honestly when the customer has no GoHighLevel record at all", async () => {
+      const crmAdapters = [...adapters, new CrmAdapter()];
+      const crmRegistry = await buildToolRegistry(crmAdapters);
+      const r = await runAgentTurn({
+        prompt: "Analyze this customer's history",
+        enabledSources: ["commas", "crm"],
+        context: richContext("2417", "Dispute #2417 — Elena Cruz", "elena.cruz@email.com", "Elena Cruz"),
+        conversationHistory: [],
+        llmClient,
+        adapters: crmAdapters,
+        registry: crmRegistry,
+      });
+      expect(r.answer).toContain("No GoHighLevel contact record");
     });
   });
 

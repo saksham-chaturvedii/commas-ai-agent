@@ -53,7 +53,10 @@ const CREDIT_COST_PER_MESSAGE = 1;
 const HISTORY_TURN_LIMIT = 20;
 // v2: seed-data/copy fixes from PRODUCT_READINESS_AUDIT.md P0-2 (a v1 store would keep serving
 // the old contradictory "62 transactions / 1 open dispute" seed chats forever — P2-10).
-const STORAGE_KEY = "commas-ai-agent:v2";
+// v3: unified conversation model (docs/AI_ASSISTANT_IMPLEMENTATION_STATUS.md's current phase)
+// added the required `type`/`disputeId` fields to `Chat` — bumping the key, same as v1→v2,
+// rather than writing runtime normalization for a handful of prototype localStorage records.
+const STORAGE_KEY = "commas-ai-agent:v3";
 
 interface PersistedShape {
   chats: Chat[];
@@ -271,11 +274,13 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     const chat: Chat = {
       id,
       title: context ? context.label : "New chat",
+      type: context?.kind === "dispute" ? "dispute" : "global",
       createdAt: ts,
       updatedAt: ts,
       status: "idle",
       enabledSources: [...DEFAULT_ENABLED_SOURCES],
       context,
+      disputeId: context?.kind === "dispute" ? context.id : undefined,
       messages: [],
     };
     setChats((prev) => [chat, ...prev]);

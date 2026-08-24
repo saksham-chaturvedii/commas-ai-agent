@@ -107,7 +107,7 @@ const SOURCE_TOOL_NAMES: Record<string, string> = {
   calendar_list_events: "Google Calendar",
 };
 
-type DisputeIntent = "draft" | "evidence" | "communications" | "summarize" | "recommend" | "why";
+type DisputeIntent = "draft" | "evidence" | "communications" | "history" | "summarize" | "recommend" | "why";
 
 /** Which demo-script question (docs/active-context.md — "Resolution Center Demo-Readiness")
  * the user is asking, checked in specificity order so overlapping words ("recommended"
@@ -115,6 +115,7 @@ type DisputeIntent = "draft" | "evidence" | "communications" | "summarize" | "re
 function detectDisputeIntent(p: string): DisputeIntent | undefined {
   if (/\bdraft\b/.test(p)) return "draft";
   if (/communicat|correspond|inbox|gmail/.test(p)) return "communications";
+  if (/customer('?s)? history|account history|pipeline/.test(p)) return "history";
   if (/evidence/.test(p)) return "evidence";
   if (/summar/.test(p)) return "summarize";
   if (/\brecommend|next step|next action|what should i do/.test(p)) return "recommend";
@@ -195,6 +196,14 @@ export class StubLlmClient implements LlmClient {
             input: { with_email: disputeData?.customerEmail ?? "" },
           };
         }
+        if (disputeIntent === "history" && hasTool("crm_get_contact") && !calledNames.includes("crm_get_contact")) {
+          return {
+            type: "tool_call",
+            toolCallId: newId(),
+            toolName: "crm_get_contact",
+            input: { email: disputeData?.customerEmail ?? "" },
+          };
+        }
         if (disputeIntent) {
           return this.answerDisputeIntent(disputeIntent, toolHistory, disputeId, hasTool("gmail_search_threads"), hasTool);
         }
@@ -218,6 +227,11 @@ export class StubLlmClient implements LlmClient {
         if (disputeIntent === "communications" && hasTool("gmail_search_threads") && !calledNames.includes("gmail_search_threads")) {
           const email = context.dispute?.customerEmail ?? "";
           return { type: "tool_call", toolCallId: newId(), toolName: "gmail_search_threads", input: { with_email: email } };
+        }
+        // The history intent additionally pulls the live GoHighLevel contact when available.
+        if (disputeIntent === "history" && hasTool("crm_get_contact") && !calledNames.includes("crm_get_contact")) {
+          const email = context.dispute?.customerEmail ?? "";
+          return { type: "tool_call", toolCallId: newId(), toolName: "crm_get_contact", input: { email } };
         }
         return this.answerDisputeIntent(disputeIntent, toolHistory, context.id, hasTool("gmail_search_threads"), hasTool);
       }
@@ -759,6 +773,26 @@ export class StubLlmClient implements LlmClient {
             : `No Gmail threads found with ${d.customerName.split(" ")[0]}.`
           : "(Gmail isn't enabled for this chat — turn it on in Sources and I'll pull the actual threads.)";
         return { type: "final", text: `${liveLine}\n\n${d.communicationsSummary}` };
+      }
+
+      case "history": {
+        const crmResult = toolHistory.find((t) => t.toolName === "crm_get_contact")?.result;
+        const contact = crmResult?.ok
+          ? (crmResult.data as { contact: { name: string; status: string; pipelineStage: string; notes: string } | null }).contact
+          : undefined;
+        if (!hasTool("crm_get_contact")) {
+          return {
+            type: "final",
+            text: "GoHighLevel isn't connected for this chat, so I can't pull account history. Turn it on in Sources and ask again.",
+          };
+        }
+        if (!contact) {
+          return { type: "final", text: `No GoHighLevel contact record for ${d.customerEmail} — no pipeline or account history on file.` };
+        }
+        return {
+          type: "final",
+          text: `${contact.name} — ${contact.status.replace(/_/g, " ")}, pipeline stage "${contact.pipelineStage}". ${contact.notes}`,
+        };
       }
 
       case "evidence": {
