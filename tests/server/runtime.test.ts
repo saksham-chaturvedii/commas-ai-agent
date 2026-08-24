@@ -134,7 +134,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
   });
 
   describe("multi-source dispute investigation (the agent decides which tools it needs)", () => {
-    it("chains through every enabled source relevant to the dispute and synthesizes across them", async () => {
+    it("selectively chains through the sources prioritized for this dispute's reason, skipping the rest", async () => {
       const result = await runAgentTurn({
         prompt: "Help me resolve this dispute",
         enabledSources: [...ALL_SOURCES],
@@ -146,12 +146,91 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       });
 
       expect(result.error).toBeUndefined();
+      // product_not_received prioritizes activity/fulfillment + communications evidence —
+      // GoHighLevel's pipeline data isn't informative for "did they receive it," so it's the
+      // one enabled source deliberately skipped (server/llm/stubClient.ts's REASON_SOURCE_PRIORITY).
       const usedSources = new Set(result.steps.map((s) => s.sourceId));
-      expect(usedSources).toEqual(new Set(["commas", "crm", "gmail", "fathom", "zoom"]));
+      expect(usedSources).toEqual(new Set(["commas", "gmail", "fathom", "zoom"]));
       expect(result.answer).toContain("Situation summary");
       expect(result.answer).toContain("What I found");
-      expect(result.answer.toLowerCase()).toContain("gohighlevel");
       expect(result.answer.toLowerCase()).toContain("fathom");
+      expect(result.answer).toContain("Missing information");
+      expect(result.answer).toContain("GoHighLevel");
+      expect(result.answer.toLowerCase()).toContain("lower priority");
+    });
+
+    it("investigates a product_unacceptable dispute (Marcus Webb #2502) by prioritizing Calendar, Zoom, Fathom, and Gmail, surfacing contradicting evidence", async () => {
+      const result = await runAgentTurn({
+        prompt: "Investigate this dispute",
+        enabledSources: [...ALL_SOURCES],
+        context: {
+          kind: "dispute",
+          id: "2502",
+          label: "Dispute #2502 — Marcus Webb",
+          dispute: {
+            customerName: "Marcus Webb",
+            customerEmail: "marcus.webb@email.com",
+            transactionId: "txn_marcus",
+            amountCents: 12900,
+            reason: "product_unacceptable",
+            openedAt: "August 15, 2026",
+            evidenceDueAt: "August 29, 2026",
+            evidenceStatus: "not_started",
+            status: "Needs response",
+            evidenceSummary: [],
+          },
+        },
+        conversationHistory: [],
+        llmClient,
+        adapters,
+        registry,
+      });
+
+      expect(result.error).toBeUndefined();
+      const usedSources = new Set(result.steps.map((s) => s.sourceId));
+      expect(usedSources).toEqual(new Set(["commas", "google-calendar", "zoom", "fathom", "gmail"]));
+      // the call happened (contradicting "never received the service") but ran short against
+      // the booked time — genuinely ambiguous, supporting-and-contradicting evidence.
+      expect(result.answer.toLowerCase()).toContain("google calendar");
+      expect(result.answer).toContain("30 minutes");
+      expect(result.answer).toContain("14-minute");
+      expect(result.answer).toContain("Missing information");
+      expect(result.answer).toContain("GoHighLevel");
+      expect(result.answer.toLowerCase()).toContain("lower priority");
+    });
+
+    it("investigates a duplicate-charge dispute (Elena Cruz #2417) by prioritizing only Gmail", async () => {
+      const result = await runAgentTurn({
+        prompt: "Investigate this dispute",
+        enabledSources: [...ALL_SOURCES],
+        context: {
+          kind: "dispute",
+          id: "2417",
+          label: "Dispute #2417 — Elena Cruz",
+          dispute: {
+            customerName: "Elena Cruz",
+            customerEmail: "elena.cruz@email.com",
+            transactionId: "txn_elena",
+            amountCents: 9900,
+            reason: "duplicate",
+            openedAt: "August 10, 2026",
+            evidenceDueAt: "August 24, 2026",
+            evidenceStatus: "ready",
+            status: "Needs response",
+            evidenceSummary: [],
+          },
+        },
+        conversationHistory: [],
+        llmClient,
+        adapters,
+        registry,
+      });
+
+      expect(result.error).toBeUndefined();
+      const usedSources = new Set(result.steps.map((s) => s.sourceId));
+      expect(usedSources).toEqual(new Set(["commas", "gmail"]));
+      expect(result.answer).toContain("Missing information");
+      expect(result.answer.toLowerCase()).toContain("lower priority");
     });
 
     it("only uses sources actually enabled for the chat, and says what it couldn't check", async () => {

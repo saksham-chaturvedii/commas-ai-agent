@@ -1,14 +1,17 @@
 import type { AdapterToolDef, SourceAdapter } from "./types.js";
 import { jsonResult } from "./types.js";
 
-/** API-style adapter — PROTOTYPE DATA ONLY, no real Google Calendar/OAuth involved. Same
- * two sessions as the Fathom/Zoom mocks (Aug 4, Aug 6), as accepted calendar invitations. */
+/** API-style adapter — PROTOTYPE DATA ONLY, no real Google Calendar/OAuth involved. Sarah's two
+ * sessions match the Fathom/Zoom mocks (Aug 4, Aug 6); Marcus's scheduled 1:1 Strategy Call
+ * (Aug 13) matches his Fathom/Zoom records too — `durationMinutes` documents what was BOOKED,
+ * for comparison against how long the call actually ran (see mockFathomServer.ts). */
 
 interface MockEvent {
   id: string;
   attendeeEmail: string;
   title: string;
   startAt: string;
+  durationMinutes: number;
   status: "accepted" | "declined" | "no_response";
 }
 
@@ -18,6 +21,7 @@ const EVENTS: MockEvent[] = [
     attendeeEmail: "sarah.johnson@email.com",
     title: "Pro Coaching Program — Onboarding call",
     startAt: "2026-08-04T15:00:00Z",
+    durationMinutes: 45,
     status: "accepted",
   },
   {
@@ -25,6 +29,15 @@ const EVENTS: MockEvent[] = [
     attendeeEmail: "sarah.johnson@email.com",
     title: "Pro Coaching Program — Week 2 group coaching session",
     startAt: "2026-08-06T16:00:00Z",
+    durationMinutes: 60,
+    status: "accepted",
+  },
+  {
+    id: "cal_evt_3",
+    attendeeEmail: "marcus.webb@email.com",
+    title: "1:1 Strategy Call — Marcus Webb",
+    startAt: "2026-08-13T18:00:00Z",
+    durationMinutes: 30,
     status: "accepted",
   },
 ];

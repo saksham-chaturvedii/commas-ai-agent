@@ -3,8 +3,10 @@ import { z } from "zod";
 
 /**
  * Mock Zoom MCP server — PROTOTYPE DATA ONLY. Zoom has no publicly documented MCP server used
- * by this project, so this is a plausible mock shape, corroborating the same two calls as
- * mockFathomServer.ts (matching join times) — that corroboration is the point of having both.
+ * by this project, so this is a plausible mock shape, corroborating the same calls as
+ * mockFathomServer.ts (matching join times/durations) — that corroboration is the point of
+ * having both. Marcus Webb's meeting corroborates Fathom's ~14-minute duration specifically:
+ * two independent sources agreeing the call ran short is stronger evidence than either alone.
  */
 
 interface MockMeeting {
@@ -12,6 +14,7 @@ interface MockMeeting {
   attendeeEmail: string;
   topic: string;
   joinedAt: string;
+  leftAt: string;
   durationMinutes: number;
 }
 
@@ -21,6 +24,7 @@ const MEETINGS: MockMeeting[] = [
     attendeeEmail: "sarah.johnson@email.com",
     topic: "Pro Coaching Program — Onboarding call",
     joinedAt: "2026-08-04T15:01:00Z",
+    leftAt: "2026-08-04T15:42:00Z",
     durationMinutes: 41,
   },
   {
@@ -28,7 +32,16 @@ const MEETINGS: MockMeeting[] = [
     attendeeEmail: "sarah.johnson@email.com",
     topic: "Pro Coaching Program — Week 2 group coaching session",
     joinedAt: "2026-08-06T16:02:00Z",
+    leftAt: "2026-08-06T16:56:00Z",
     durationMinutes: 54,
+  },
+  {
+    id: "zoom_mtg_3",
+    attendeeEmail: "marcus.webb@email.com",
+    topic: "1:1 Strategy Call — Marcus Webb",
+    joinedAt: "2026-08-13T18:00:00Z",
+    leftAt: "2026-08-13T18:14:00Z",
+    durationMinutes: 14,
   },
 ];
 

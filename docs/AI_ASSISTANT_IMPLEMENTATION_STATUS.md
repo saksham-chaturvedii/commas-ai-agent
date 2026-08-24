@@ -29,9 +29,9 @@ Build a real AI assistant inside the existing Commas AI Agent prototype that can
 
 ## Current phase
 
-**5 — Agent-initiated application actions (implemented, live-verified)**
+**6 — Simulated multi-source connectors + reason-driven selective investigation (implemented, live-verified)**
 
-The agent can now propose, not just describe: `propose_add_evidence` and `propose_draft_response` (`server/agent/actions/index.ts`) are LLM-visible tools, wired into the legacy runtime's real tool-calling loop, offered only for an ACTIVE dispute (never a resolved one — enforced server-side, before the LLM even sees the tools exist). Every proposal renders inline in the chat as a `ProposedActionCard` with explicit approve/decline controls — nothing executes until clicked. Approving calls the exact same `addEvidenceItem`/`setResponseDraft` functions the Resolution Center's own manual "Add evidence" button and response textarea already use (now lifted into `useChatStore` so both the chat and the Resolution Center read/write one shared state), so the checklist and response draft genuinely update — live-verified end to end, including the resolved-dispute restriction.
+Gmail, Google Calendar, Fathom, Zoom, and GoHighLevel are now realistic simulated connectors (no OAuth, no live external calls) exposed through the same `SourceAdapter` tool abstraction Commas already uses — enriched with source-specific data (email threads by category, calendar event durations, call transcripts/recordings, meeting join/leave times, CRM pipeline stage + activity log) instead of the near-empty stubs from earlier phases. The legacy runtime's dispute-investigation chain (`server/llm/stubClient.ts`) no longer checks every connector for every dispute: `REASON_SOURCE_PRIORITY` maps a dispute's reason code to an ordered, selective list of sources to check (`product_not_received` → Fathom/Zoom/Gmail; `product_unacceptable` → Calendar/Zoom/Fathom/Gmail; `duplicate` → Gmail only; `fraudulent` → GoHighLevel), and the synthesis step reports two distinct reasons a source might be absent — genuinely not enabled for the chat, vs. enabled but deliberately lower priority for this reason — instead of one blanket "missing" bucket. The explicit "search across my connected apps" path is unchanged and stays exhaustive by design. Live-verified end to end: Marcus Webb's #2502 (`product_unacceptable`) investigation checks Calendar/Zoom/Fathom/Gmail (skipping GoHighLevel) and surfaces genuinely ambiguous evidence — the booked call happened but ran 14 of 30 minutes; Sarah Johnson's #2481 (`product_not_received`) checks only Fathom/Zoom when Gmail isn't enabled for the chat, and correctly separates "GoHighLevel, Gmail — not enabled" from "Google Calendar — available but lower priority" in the answer.
 
 ## Phase log
 
@@ -43,7 +43,8 @@ The agent can now propose, not just describe: `propose_add_evidence` and `propos
 | 3 | Shared agent context and session model — `AgentContext` (dispute facts, evidence, workspace summary, investigation progress), unified into both runtimes, isolation-tested | ✅ Implemented, live-verified — 2026-08-24 |
 | 4 | First real tool layer — Commas read tools wired into the shared agent's own tool-calling loop, reusing the existing adapter/registry architecture | ✅ Implemented, live-verified — 2026-08-24 |
 | 5 | Agent-initiated application actions — propose → approve → execute → UI-updates for evidence and response drafts, ACTIVE/RESOLVED dispute gating | ✅ Implemented, live-verified — 2026-08-24 |
-| 6 | Same propose/approve action pipeline for the shared agent (global chat) once dispute chats move off the legacy transport; wider (non-Commas) source tools once OAuth connectors exist | ⏳ Next |
+| 6 | Simulated Gmail/Calendar/Fathom/Zoom/GoHighLevel connectors with realistic data; reason-driven selective source prioritization replacing the fixed always-check-everything chain | ✅ Implemented, live-verified — 2026-08-24 |
+| 7 | Same propose/approve action pipeline for the shared agent (global chat) once dispute chats move off the legacy transport; real OAuth connectors to replace this phase's simulated ones | ⏳ Next |
 
 ## Phase 2 — what was built
 
@@ -361,9 +362,69 @@ No file under `src/` was touched this phase — the entire tool layer is server-
 - `npm run build` — clean.
 - Live in-browser walkthrough — see above.
 
+## Phase 6 — what was built
+
+### Realistic simulated connectors, same tool abstraction as Commas
+
+`SourceAdapter` (`server/adapters/types.ts`) is the one abstraction every source implements — `{sourceId, kind, listTools(), callTool(name, args)}` — and Gmail/Calendar/GoHighLevel already went through it as API-style adapters, Fathom/Zoom as mock MCP servers. This phase didn't add a second abstraction for the new sources; it enriched the existing thin mocks with realistic, source-specific structured data, and taught the LLM stub which of them to actually call:
+
+- **Gmail** (`server/adapters/gmailAdapter.ts`) — threads gain a `category` (`purchase_confirmation` | `support_request` | `refund_discussion`). Elena Cruz (#2417, duplicate charge) got a real thread matching her dispute's authored `communicationsSummary` — the summary already claimed a Gmail thread existed that the mock data never actually had; fixed as part of this phase rather than left as a latent inconsistency.
+- **Google Calendar** (`server/adapters/calendarAdapter.ts`) — events gain `durationMinutes` (what was *booked*), including a new event for Marcus Webb's 1:1 Strategy Call (30 min booked).
+- **Fathom** (`server/mcp/mockFathomServer.ts`) — calls gain `transcriptExcerpt` and a mock `recordingUrl`. Marcus Webb's call is deliberately ambiguous evidence: it happened (contradicting "never received the service") but ran only 14 of the 30 booked minutes, with a transcript excerpt showing it was cut short.
+- **Zoom** (`server/mcp/mockZoomServer.ts`) — meetings gain `leftAt`, independently corroborating Fathom's duration finding (Marcus's Zoom meeting is also 14 minutes).
+- **GoHighLevel** (`server/adapters/crmAdapter.ts`) — contacts gain `pipelineStage` and an `activityLog` (pipeline-stage changes, booked calls, notes) — the "pipeline/activity records" a real CRM exposes beyond a flat contact lookup. Not every customer has a record (Elena and David don't) — matched honestly to what a real business would actually have, not invented for coverage.
+
+The UI's connected-apps surface (`src/components/chat/SourceIcon.tsx`, `src/lib/mockData.ts`) already had brand-recognizable icons and the correct "GoHighLevel" label (not a generic "CRM") from earlier phases — confirmed, not modified.
+
+### Selective source prioritization, replacing "always check everything"
+
+`server/llm/stubClient.ts`'s `disputeChainStep` used to walk a fixed `DISPUTE_CHAIN` — every dispute, regardless of reason, checked GoHighLevel → Gmail → Fathom → Zoom in the same order. `REASON_SOURCE_PRIORITY` now maps a Stripe-style dispute reason code to an ordered, intentionally partial list:
+
+| Reason | Priority order | Rationale |
+|---|---|---|
+| `product_not_received` | Fathom, Zoom, Gmail | Access/activity + fulfillment evidence — did the customer actually engage? GoHighLevel's pipeline data isn't informative for "did they receive it." |
+| `product_unacceptable` (Commas' service-style product, the 1:1 Strategy Call) | Calendar, Zoom, Fathom, Gmail | Whether the session happened and what it covered is exactly what these four can confirm. |
+| `duplicate` | Gmail | A transaction-record question first; Gmail only to check whether the customer already self-reported it. |
+| `fraudulent` | GoHighLevel | Account/transaction history — the real Stripe reason code, no demo dispute currently uses it, covered by a direct unit test instead. |
+
+A reason code not in the table falls back to `DEFAULT_SOURCE_PRIORITY` (the old full chain) — a safe, exhaustive default, never a silent gap for an un-reasoned-about case. The explicit "search across my connected apps" path (`crossSourceStep`, triggered by phrases like "connected apps"/"across my") is unchanged and still exhaustive — that's a deliberate, explicit user request, not the automatic blanket search the task warns against.
+
+The synthesis step (`synthesizeDisputeInvestigation`) now distinguishes two reasons a source is absent from the answer, each with its own wording, instead of one "missing" bucket keyed only on connection status:
+- **not enabled for this chat** — the source is genuinely turned off; "Turn on in the sources menu for a fuller picture."
+- **available but not prioritized** — the source is connected, but this dispute's reason code doesn't call for it; "available but not checked; lower priority for a '`<reason>`' investigation."
+
+A Google Calendar findings block was added to the synthesis output (previously absent entirely, even though Calendar data existed since Phase 5-era work).
+
+### Verified
+
+- `tests/server/sourcePriority.test.ts` (new) — direct unit coverage of `sourcePriorityFor()` (now exported) for all four mapped reasons plus the unmapped-reason fallback, including the `fraudulent` mapping with no UI-visible dispute case.
+- `tests/server/runtime.test.ts` — the existing "chains through every enabled source" test rewritten to assert the new selective behavior for #2481 (`{commas, gmail, fathom, zoom}`, `crm` no longer called); two new tests added: Marcus Webb's #2502 investigation (Calendar/Zoom/Fathom/Gmail checked, GoHighLevel deliberately skipped, both missing-information categories present) and Elena Cruz's #2417 investigation (`{commas, gmail}` only, per the `duplicate` priority). David Kim's existing P0-3 test (uncertainty narrative, "no email threads found") verified unaffected — Gmail deliberately stayed in `product_not_received`'s priority list specifically to preserve it.
+- `npx tsc -b`, `npm run lint`, `npx vitest run` (**165/165 passing** — 158 at Phase 5's commit + 7 new: 2 in `runtime.test.ts`, 5 in the new `sourcePriority.test.ts`), `npm run build` — all clean.
+
+**Live-verified in-browser**, both servers running, stub LLM:
+1. Marcus Webb's #2502, fresh investigation with all 6 sources enabled: visible step-by-step progress — "Checking dispute record… Checking Google Calendar… Checking Zoom meeting history… Searching Fathom calls… Checking Gmail threads…" — GoHighLevel never appears in the progress list. Final answer's "What I found" reports Calendar (30 min booked), Zoom + Fathom (14 min actual, corroborating each other), Gmail (no threads); "Missing information" correctly labels GoHighLevel as "available but not checked; lower priority for a 'product unacceptable' investigation."
+2. Sarah Johnson's #2481, fresh session, only Commas/Calendar/Zoom/Fathom enabled for the chat (Gmail/GoHighLevel not enabled): "What I found" reports only Fathom + Zoom (Gmail skipped because unavailable, not because it wasn't prioritized); "Missing information" correctly splits into "GoHighLevel, Gmail — not enabled for this chat" vs. "Google Calendar — available but not checked; lower priority for a 'product not received' investigation" — both categories rendering correctly in the same answer.
+3. Connected-apps modal (`Manage connected apps`): all 5 non-Commas sources show distinct, recognizable brand icons and correct product names, including "GoHighLevel" (never a generic "CRM").
+4. Console: no errors in either run.
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `server/adapters/gmailAdapter.ts` | `+ category` on threads; new thread for Elena Cruz matching her authored narrative |
+| `server/adapters/calendarAdapter.ts` | `+ durationMinutes` on events; new event for Marcus Webb |
+| `server/mcp/mockFathomServer.ts` | `+ transcriptExcerpt`, `+ recordingUrl`; new ambiguous-evidence call for Marcus Webb |
+| `server/mcp/mockZoomServer.ts` | `+ leftAt`; new meeting for Marcus Webb corroborating Fathom |
+| `server/adapters/crmAdapter.ts` | `+ pipelineStage`, `+ activityLog`; new contacts for Marcus Webb and Priya Nair |
+| `server/llm/stubClient.ts` | `DISPUTE_CHAIN` replaced by `REASON_SOURCE_PRIORITY`/`DEFAULT_SOURCE_PRIORITY`/`sourcePriorityFor()` (exported); `disputeChainStep` rewritten to prioritize by reason code instead of a fixed order; `synthesizeDisputeInvestigation` gains a Calendar findings block and two-category missing-information logic |
+| `tests/server/runtime.test.ts` | Multi-source test updated for selective behavior; new Marcus Webb / Elena Cruz investigation tests |
+| `tests/server/sourcePriority.test.ts` | New — direct `sourcePriorityFor()` unit coverage |
+
 ## Known limitations (honest, not hidden)
 
-- **"Open a dispute" and "focus/highlight relevant evidence" have no real execution this phase.** Both are in the task's list of potential actions; the two actually wired (add evidence, draft response) are the ones the given examples demonstrate and the ones with an unambiguous, already-existing state to mutate. "Open a dispute" is a GLOBAL-chat action (navigating *to* a dispute) but GLOBAL chat runs on the shared agent, not the legacy runtime this phase's propose-tools live on — wiring it would mean either adding propose-tools to the shared agent too (its own open item, see Phase 6 below) or a separate mechanism. "Focus/highlight evidence" has no existing highlight/scroll-to affordance in `DisputeDetail` to hook into without a UI change, which was out of scope.
+- **No device/IP or geographic-consistency data exists for the `fraudulent` priority profile.** The task names these alongside account/transaction history as fraud-relevant evidence; account/transaction history is real (GoHighLevel's `pipelineStage`/`activityLog`, Commas' own transaction record), but no connector in this prototype exposes device, IP, or geographic data, and none was fabricated to fill out the category — `sourcePriorityFor("fraudulent")` only prioritizes `crm_get_contact`, and there's no UI-visible dispute case using this reason code (covered by a direct unit test instead, `tests/server/sourcePriority.test.ts`).
+- **`buildEvidenceProposal` can still cite a source's `communicationsSummary` even when that source found nothing this turn** (pre-existing, not introduced or fixed this phase) — e.g. investigating Marcus Webb (#2502) proposes a "Customer correspondence" evidence candidate sourced from Gmail even though `gmail_search_threads` returned zero threads, because the gate is "was Gmail checked," not "did Gmail find anything." His dispute's `communicationsSummary` field is itself authored around the *absence* of email (informative to cite, but not as "correspondence"). Left alone this phase — `buildEvidenceProposal` wasn't in scope, and reworking its grounding logic risks regressing the evidence-recommendation tests from Phase 5.
+- **"Open a dispute" and "focus/highlight relevant evidence" have no real execution.** Both are in the Phase 5 task's list of potential actions; the two actually wired (add evidence, draft response) are the ones the given examples demonstrate and the ones with an unambiguous, already-existing state to mutate. "Open a dispute" is a GLOBAL-chat action (navigating *to* a dispute) but GLOBAL chat runs on the shared agent, not the legacy runtime the propose-tools live on — wiring it would mean either adding propose-tools to the shared agent too (its own open item, see Phase 7 below) or a separate mechanism. "Focus/highlight evidence" has no existing highlight/scroll-to affordance in `DisputeDetail` to hook into without a UI change, which was out of scope.
 - **The propose/approve pipeline exists only in the legacy runtime.** Dispute chats still don't route through the shared agent's streaming endpoint (unchanged from Phase 4) — a deliberate, repeatedly-reaffirmed risk decision, not an oversight. `pendingActions` (the shared context model's placeholder field) is still always `[]`.
 - **`commas_mark_dispute_response_ready` is unaffected** — it's a genuinely different kind of action (marks the dispute record itself ready via a real, if simulated, "write" tool call) and keeps using the pre-existing `pendingApproval` blocking-pause mechanism, not the new non-blocking `ProposedAction` one. Two related-but-distinct approval mechanisms now coexist in the legacy runtime for two different reasons (one pauses an in-progress tool loop; one attaches a reviewable card to a completed turn) — not consolidated into one this phase.
 - **Commas only, no OAuth connectors, no wider tool set for the shared agent** (unchanged from Phase 4).
@@ -373,11 +434,11 @@ No file under `src/` was touched this phase — the entire tool layer is server-
 ## Implementation sequence (from architecture §11)
 
 1. ~~Live model on the existing loop (no UI change)~~ — **done in Phase 2**.
-2. One dataset + wider Commas/connector tools with citations — **Commas read tools done in Phase 4**; connector tools still blocked on OAuth
+2. One dataset + wider Commas/connector tools with citations — **Commas read tools done in Phase 4**; Gmail/Calendar/Fathom/Zoom/GoHighLevel now realistic *simulated* connectors with reason-driven selective calling (**Phase 6**); real OAuth-backed connectors still open
 3. ~~Server-side sessions + context envelope + context block~~ — **done in Phase 3**.
 4. Streaming SSE transport consumed by `useChatStore` — **done in Phase 2**.
-5. Dispute-mode investigation prompt (loop, stopping criteria, report format) — the tool-calling loop (Phase 4) plus grounded evidence recommendation (this phase) are the mechanism; a dedicated investigation *prompt/strategy* refinement on top is still open
-6. ~~Resolution Center persistence + proposal/approval actions (`ProposalCard`, executors)~~ — **done this phase**: `ProposedActionCard` is that component, `resolveProposedAction` is the executor, evidence/draft state is real and shared with the Resolution Center
+5. Dispute-mode investigation prompt (loop, stopping criteria, report format) — the tool-calling loop (Phase 4), grounded evidence recommendation (Phase 5), and reason-driven source selection (Phase 6) are the mechanism; a dedicated investigation *prompt/strategy* refinement on top is still open
+6. ~~Resolution Center persistence + proposal/approval actions (`ProposalCard`, executors)~~ — **done in Phase 5**: `ProposedActionCard` is that component, `resolveProposedAction` is the executor, evidence/draft state is real and shared with the Resolution Center
 7. Global-mode polish, hardening, docs, regression suite — still open; the same propose/approve pipeline for the shared agent (global chat) is the natural next piece
 
 ## Notes

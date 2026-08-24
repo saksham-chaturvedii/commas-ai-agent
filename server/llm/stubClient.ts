@@ -18,7 +18,45 @@ import type { ConversationTurn } from "../types.js";
  * are reported honestly ("no threads found"), never as "source wasn't checked".
  */
 
-const DISPUTE_CHAIN = ["commas_get_dispute", "crm_get_contact", "gmail_search_threads", "fathom_search_calls", "zoom_list_meetings"];
+/** Every tool `disputeChainStep` could possibly call beyond the dispute record itself — used to
+ * compute what a reason's priority list deliberately leaves out (server/llm/stubClient.ts's
+ * REASON_SOURCE_PRIORITY), distinct from what simply isn't enabled for this chat. */
+const ALL_INVESTIGATION_TOOLS = ["crm_get_contact", "gmail_search_threads", "fathom_search_calls", "zoom_list_meetings", "calendar_list_events"];
+
+/**
+ * Which sources actually matter for a given dispute reason — "the agent should selectively call
+ * relevant sources... do not automatically search every connector for every request." Ordered:
+ * earlier entries are checked first. A reason not listed here falls back to
+ * DEFAULT_SOURCE_PRIORITY (the full legacy chain — the safe, exhaustive default for anything not
+ * explicitly reasoned about yet, never a silent gap).
+ *   - product_not_received: activity/fulfillment evidence (did the customer actually engage?)
+ *     plus communications — GoHighLevel's pipeline/deal data isn't informative for "did they
+ *     receive it," so it's the one source deliberately skipped here.
+ *   - product_unacceptable ("service not received" in the task's own wording — Commas' one
+ *     service-style product, the 1:1 Strategy Call, disputes under this code): Calendar, Zoom,
+ *     Fathom, and communications are exactly the sources that can confirm whether the session
+ *     happened and what it covered; GoHighLevel again isn't informative here.
+ *   - duplicate: a transaction-record question first and foremost — communications only to
+ *     check whether the customer already self-reported it (Elena Cruz's real story). Fathom/
+ *     Zoom/Calendar/GoHighLevel have nothing to add to "was this charged twice."
+ *   - fraudulent (the real Stripe/card-network dispute-reason-code spelling — no current demo
+ *     case uses it, but the mapping is real and tested): account/transaction history is exactly
+ *     GoHighLevel's pipeline + Commas' own transaction record. Device/IP and geographic
+ *     consistency data would belong here too, but no connector in this prototype actually
+ *     exposes that — never fabricated just to fill out the category (see Known limitations).
+ */
+const REASON_SOURCE_PRIORITY: Record<string, string[]> = {
+  product_not_received: ["fathom_search_calls", "zoom_list_meetings", "gmail_search_threads"],
+  product_unacceptable: ["calendar_list_events", "zoom_list_meetings", "fathom_search_calls", "gmail_search_threads"],
+  duplicate: ["gmail_search_threads"],
+  fraudulent: ["crm_get_contact"],
+};
+const DEFAULT_SOURCE_PRIORITY = ["crm_get_contact", "gmail_search_threads", "fathom_search_calls", "zoom_list_meetings", "calendar_list_events"];
+
+export function sourcePriorityFor(reasonCode: string | undefined): string[] {
+  if (!reasonCode) return DEFAULT_SOURCE_PRIORITY;
+  return REASON_SOURCE_PRIORITY[reasonCode] ?? DEFAULT_SOURCE_PRIORITY;
+}
 
 /** The 5 demo dispute ids (docs/active-context.md — "Resolution Center Demo-Readiness") — used
  * ONLY to resolve which dispute a GLOBAL chat is talking about (see `resolveGlobalDisputeFocus`
@@ -300,20 +338,22 @@ export class StubLlmClient implements LlmClient {
     if (!calledNames.has("commas_get_dispute") && hasTool("commas_get_dispute")) {
       return { type: "tool_call", toolCallId: newId(), toolName: "commas_get_dispute", input: { id: disputeId } };
     }
-    if (!calledNames.has("crm_get_contact") && hasTool("crm_get_contact")) {
-      return { type: "tool_call", toolCallId: newId(), toolName: "crm_get_contact", input: { email: customerEmail } };
-    }
-    if (!calledNames.has("gmail_search_threads") && hasTool("gmail_search_threads")) {
-      return { type: "tool_call", toolCallId: newId(), toolName: "gmail_search_threads", input: { with_email: customerEmail } };
-    }
-    if (!calledNames.has("fathom_search_calls") && hasTool("fathom_search_calls")) {
-      return { type: "tool_call", toolCallId: newId(), toolName: "fathom_search_calls", input: { attendee_email: customerEmail } };
-    }
-    if (!calledNames.has("zoom_list_meetings") && hasTool("zoom_list_meetings")) {
-      return { type: "tool_call", toolCallId: newId(), toolName: "zoom_list_meetings", input: { attendee_email: customerEmail } };
+
+    // The dispute record has to come back before we know which reason code to prioritize by —
+    // until then there's nothing more the chain can decide.
+    const disputeResult = toolHistory.find((t) => t.toolName === "commas_get_dispute")?.result;
+    const reasonCode = disputeResult?.ok ? (disputeResult.data as { dispute: DisputeShape }).dispute.reason : undefined;
+
+    // Selective, reason-driven source order — "the agent should selectively call relevant
+    // sources... do not automatically search every connector for every request" — instead of
+    // the old fixed chain that always checked every source regardless of dispute type.
+    for (const toolName of sourcePriorityFor(reasonCode)) {
+      if (calledNames.has(toolName) || !hasTool(toolName)) continue;
+      const argKey = toolName === "crm_get_contact" ? "email" : toolName === "gmail_search_threads" ? "with_email" : "attendee_email";
+      return { type: "tool_call", toolCallId: newId(), toolName, input: { [argKey]: customerEmail } };
     }
 
-    // One evidence-recommendation pass, after every available source has been checked but
+    // One evidence-recommendation pass, after every prioritized source has been checked but
     // before synthesizing the final answer — grounded only in what was actually found this
     // turn (see buildEvidenceProposal), never a generic per-dispute template.
     if (!calledNames.has("propose_add_evidence") && hasTool("propose_add_evidence")) {
@@ -323,7 +363,7 @@ export class StubLlmClient implements LlmClient {
       }
     }
 
-    return this.synthesizeDisputeInvestigation(toolHistory, disputeId, availableTools.map((t) => t.name));
+    return this.synthesizeDisputeInvestigation(toolHistory, disputeId, availableTools.map((t) => t.name), reasonCode);
   }
 
   /** Builds evidence candidates strictly from facts already on hand this turn: the dispute's own
@@ -394,7 +434,12 @@ export class StubLlmClient implements LlmClient {
    * authored analysis fields (likelyReason / recommendedAction / uncertaintyNote /
    * resolutionOutcome) — never a one-size-fits-all recommendation — and reports every source
    * that was actually checked, including honest "no results" lines (audit P0-3/P0-8). */
-  private synthesizeDisputeInvestigation(toolHistory: ToolCallRecord[], disputeId: string, availableToolNames: string[]): LlmStepResult {
+  private synthesizeDisputeInvestigation(
+    toolHistory: ToolCallRecord[],
+    disputeId: string,
+    availableToolNames: string[],
+    reasonCodeHint?: string,
+  ): LlmStepResult {
     const get = (name: string) => toolHistory.find((t) => t.toolName === name)?.result;
     const disputeResult = get("commas_get_dispute");
 
@@ -411,6 +456,7 @@ export class StubLlmClient implements LlmClient {
 
     const dispute = (disputeResult.data as { dispute: DisputeShape }).dispute;
     const customerFirstName = dispute.customerName.split(" ")[0];
+    const reasonCode = reasonCodeHint ?? dispute.reason;
 
     const sections: string[] = [
       "### Situation summary",
@@ -456,6 +502,15 @@ export class StubLlmClient implements LlmClient {
           : `- **Zoom**: no meetings attended by ${customerFirstName}.`,
       );
     }
+    const calendar = get("calendar_list_events");
+    if (calendar?.ok) {
+      const events = (calendar.data as { events: { title: string; durationMinutes: number }[] }).events ?? [];
+      findings.push(
+        events.length > 0
+          ? `- **Google Calendar**: ${events.length} scheduled event${events.length === 1 ? "" : "s"}, including "${events[0].title}" booked for ${events[0].durationMinutes} minutes.`
+          : `- **Google Calendar**: no scheduled events for ${customerFirstName}.`,
+      );
+    }
     sections.push(...(findings.length > 0 ? findings : ["- Only Commas was checked — no external sources are enabled for this chat."]));
 
     sections.push("", "### My read");
@@ -470,12 +525,32 @@ export class StubLlmClient implements LlmClient {
       sections.push(dispute.recommendedAction);
     }
 
-    // Only sources whose tools genuinely weren't available to this chat — never a source
-    // that was checked and simply came back empty.
-    const missing = DISPUTE_CHAIN.slice(1).filter((name) => !availableToolNames.includes(name));
-    if (missing.length > 0) {
-      const labels = missing.map((n) => SOURCE_TOOL_NAMES[n]).filter(Boolean);
-      sections.push("", "### Missing information", `${labels.join(", ")} — enable in the sources menu for a fuller picture.`);
+    // Two distinct reasons a source might be absent from "What I found" above — never
+    // conflated, so the answer never implies a deliberately-skipped source was unavailable
+    // (or vice versa):
+    //   - not enabled for this chat at all (the pre-existing case)
+    //   - enabled, but simply not a priority source for this dispute's reason code, so the
+    //     chain never called it (see REASON_SOURCE_PRIORITY)
+    const priority = new Set(sourcePriorityFor(reasonCode));
+    const checked = new Set(toolHistory.map((t) => t.toolName));
+    const notEnabled = ALL_INVESTIGATION_TOOLS.filter((name) => !availableToolNames.includes(name));
+    const notPrioritized = ALL_INVESTIGATION_TOOLS.filter(
+      (name) => availableToolNames.includes(name) && !priority.has(name) && !checked.has(name),
+    );
+
+    const missingLines: string[] = [];
+    if (notEnabled.length > 0) {
+      const labels = notEnabled.map((n) => SOURCE_TOOL_NAMES[n]).filter(Boolean);
+      missingLines.push(`- ${labels.join(", ")} — not enabled for this chat. Turn on in the sources menu for a fuller picture.`);
+    }
+    if (notPrioritized.length > 0) {
+      const labels = notPrioritized.map((n) => SOURCE_TOOL_NAMES[n]).filter(Boolean);
+      missingLines.push(
+        `- ${labels.join(", ")} — available but not checked; lower priority for a "${reasonCode.replace(/_/g, " ")}" investigation.`,
+      );
+    }
+    if (missingLines.length > 0) {
+      sections.push("", "### Missing information", ...missingLines);
     }
 
     return { type: "final", text: sections.join("\n") };
