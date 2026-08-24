@@ -3,7 +3,9 @@ import { sanitizeSchemaForGemini } from "../geminiSchema.js";
 import type { ToolCallRecord } from "../types.js";
 import type { StreamStepArgs, StreamStepResult, StreamingLlmClient } from "./types.js";
 
-const DEFAULT_MODEL = "gemini-2.5-flash";
+// See server/llm/geminiClient.ts's comment — gemini-2.5-flash was retired for new users,
+// confirmed live via the API's own 404 pointing at gemini-3.6-flash.
+const DEFAULT_MODEL = "gemini-3.6-flash";
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
 /**

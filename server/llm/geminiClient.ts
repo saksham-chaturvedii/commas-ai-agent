@@ -2,7 +2,10 @@ import { AgentError } from "../agent/errors.js";
 import { sanitizeSchemaForGemini } from "./geminiSchema.js";
 import type { LlmClient, LlmStepInput, LlmStepResult, ToolCallRecord } from "./types.js";
 
-const DEFAULT_MODEL = "gemini-2.5-flash";
+// gemini-2.5-flash was retired for new users (confirmed live: 404 "no longer available to new
+// users... use models/gemini-3.6-flash") — that's the model name Google's own API error
+// pointed at, not a guess.
+const DEFAULT_MODEL = "gemini-3.6-flash";
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
 /**
