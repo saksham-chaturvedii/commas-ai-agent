@@ -8,6 +8,8 @@
  * of waiting for one big response.
  */
 
+import type { AgentContext } from "../../agent/context/model.js";
+
 export interface StreamingTranscriptEntry {
   role: "user" | "assistant";
   text: string;
@@ -18,6 +20,12 @@ export interface StreamReplyArgs {
   /** The full transcript to answer, INCLUDING the just-added user turn as the last entry —
    * everything before it is genuine prior memory the session already holds. */
   transcript: StreamingTranscriptEntry[];
+  /** The same structured context `systemPrompt` was rendered from (server/agent/context/
+   * model.ts) — passed alongside the prose, not instead of it, mirroring the legacy
+   * `LlmClient.nextStep()`'s own `context` field (server/llm/types.ts). A real model only needs
+   * the prose; `StubStreamClient` uses this to give genuinely data-grounded scripted answers
+   * (e.g. "what evidence do we have") instead of parsing its own rendered prompt back apart. */
+  context?: AgentContext;
   onDelta: (delta: string) => void | Promise<void>;
   signal?: AbortSignal;
 }

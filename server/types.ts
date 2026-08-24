@@ -16,6 +16,8 @@ export interface DisputeContextDetail {
   openedAt: string;
   evidenceDueAt: string;
   evidenceStatus: "not_started" | "in_progress" | "ready";
+  status: "Needs response" | "Won";
+  evidenceSummary: { category: string; count: number }[];
 }
 
 export interface PageContext {

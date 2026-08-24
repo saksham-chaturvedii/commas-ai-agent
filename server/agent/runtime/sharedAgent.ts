@@ -19,12 +19,23 @@
 import type { SessionConfig, SessionTranscriptEntry } from "../sessions/store.js";
 import { SessionStore } from "../sessions/store.js";
 import { buildContextPrompt } from "../context/buildContext.js";
+import { buildAgentContext, type DisputeFacts, type WorkspaceDisputeSummary } from "../context/model.js";
 import type { StreamingLlmClient } from "../../llm/streaming/types.js";
+import type { SourceId } from "../../types.js";
 
 export type AgentStreamEvent =
   | { type: "delta"; text: string }
   | { type: "done"; text: string }
   | { type: "error"; message: string };
+
+/** Per-request facts the caller supplies to keep this session's stored `AgentContext` current —
+ * see server/agent/context/model.ts. Optional: a request with none of these just gets whatever
+ * the session already knew (or a bare context, for a brand-new session). */
+export interface RunSharedAgentRequestContext {
+  connectedSources?: SourceId[];
+  dispute?: DisputeFacts;
+  workspace?: { disputesNeedingAttention: WorkspaceDisputeSummary[] };
+}
 
 export interface RunSharedAgentArgs {
   sessionId: string;
@@ -33,6 +44,7 @@ export interface RunSharedAgentArgs {
   /** Bootstraps a brand-new session's memory from client-sent text history — see
    * `SessionStore.resolve`'s doc comment for exactly when this applies. */
   bootstrapHistory?: SessionTranscriptEntry[];
+  requestContext?: RunSharedAgentRequestContext;
   llmClient: StreamingLlmClient;
   sessionStore: SessionStore;
   onEvent: (event: AgentStreamEvent) => void | Promise<void>;
@@ -40,7 +52,8 @@ export interface RunSharedAgentArgs {
 }
 
 export async function runSharedAgent(args: RunSharedAgentArgs): Promise<void> {
-  const { sessionId, config, userMessage, bootstrapHistory, llmClient, sessionStore, onEvent, signal } = args;
+  const { sessionId, config, userMessage, bootstrapHistory, requestContext, llmClient, sessionStore, onEvent, signal } =
+    args;
 
   try {
     // Serialized per sessionId: two overlapping requests for the same session (same chat open in
@@ -48,7 +61,31 @@ export async function runSharedAgent(args: RunSharedAgentArgs): Promise<void> {
     // `SessionStore.runExclusive`'s doc comment. Different sessions run fully concurrently.
     await sessionStore.runExclusive(sessionId, async () => {
       const session = sessionStore.resolve(sessionId, config, bootstrapHistory);
-      const systemPrompt = buildContextPrompt(session);
+
+      // Always a full replace, never a merge onto the session's *previous* context — see
+      // `SessionStore.updateContext`'s doc comment. `priorTurnsCompleted` is the one thing this
+      // session actually remembers about itself; everything else comes fresh from this request,
+      // so a dispute whose facts changed (e.g. new evidence) or a session that's never seen
+      // dispute/workspace facts at all can never end up holding stale ones.
+      const freshContext = buildAgentContext({
+        conversationId: sessionId,
+        conversationType: config.mode,
+        connectedSources: requestContext?.connectedSources,
+        dispute: requestContext?.dispute,
+        workspace: requestContext?.workspace,
+        priorTurnsCompleted: session.context.investigation.turnsCompleted,
+      });
+      sessionStore.updateContext(sessionId, freshContext);
+      // This runtime specifically (not the legacy one — see server/agent/runtime.ts's own
+      // buildSystemPrompt, which has real tools) has no tool-calling loop yet, so it's the only
+      // caller that needs to say so — buildContextPrompt itself stays tool-availability-agnostic.
+      const noToolsCaveat =
+        freshContext.conversationType === "dispute"
+          ? " You do not have live investigation tools available in this conversation yet — if asked to look " +
+            "up something not covered by the known facts above, say plainly that deeper investigation isn't " +
+            "wired up in this mode yet rather than guessing at details."
+          : "";
+      const systemPrompt = buildContextPrompt(freshContext) + noToolsCaveat;
 
       // The model sees the session's real prior turns plus this new user message — never the
       // client's resent history for an already-known session; that accumulated transcript is what
@@ -62,6 +99,7 @@ export async function runSharedAgent(args: RunSharedAgentArgs): Promise<void> {
       await llmClient.streamReply({
         systemPrompt,
         transcript: transcriptForModel,
+        context: freshContext,
         signal,
         onDelta: async (delta) => {
           fullText += delta;
@@ -71,6 +109,13 @@ export async function runSharedAgent(args: RunSharedAgentArgs): Promise<void> {
 
       session.transcript.push({ role: "user", text: userMessage }, { role: "assistant", text: fullText });
       session.updatedAt = new Date().toISOString();
+      // A completed turn is what "investigation progress" tracks in this phase (no tools yet to
+      // report richer signal — see server/agent/tools/index.ts) — advance it only now that the
+      // turn genuinely finished, not in the pre-computed `freshContext` above.
+      sessionStore.updateContext(sessionId, {
+        ...freshContext,
+        investigation: { status: "in_progress", turnsCompleted: freshContext.investigation.turnsCompleted + 1 },
+      });
       await onEvent({ type: "done", text: fullText });
     });
   } catch (err) {

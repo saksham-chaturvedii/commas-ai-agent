@@ -1,5 +1,5 @@
 import type { Chat, CreditsState, PageContext, SourceInfo, SuggestedCapability } from "./types";
-import { getDispute } from "./disputeData";
+import { getDispute, type AIEvidenceItem } from "./disputeData";
 
 /**
  * Hand-authored mock data for the chat/agent surfaces. No backend, no LLM, no MCP — see
@@ -63,9 +63,20 @@ export const DEFAULT_ENABLED_SOURCES = ["commas", "google-calendar", "zoom", "fa
  * mock Commas MCP server's DISPUTES record (server/mcp/mockCommasServer.ts) mirrors the same
  * ids/facts, kept in sync by hand.
  */
-export function buildDisputeContext(disputeId: string): PageContext {
+/**
+ * `evidenceItems` is the seller's currently-gathered evidence for this dispute (App.tsx's
+ * `evidenceByDispute[disputeId]`, seeded + session-added) — summarized by checklist category
+ * here so the agent can answer "what evidence do we have" from context alone, without a tool
+ * call and without shipping full evidence text/files over the wire. Omit it only when no
+ * evidence state is available yet (e.g. a not-yet-rendered dispute).
+ */
+export function buildDisputeContext(disputeId: string, evidenceItems: AIEvidenceItem[] = []): PageContext {
   const d = getDispute(disputeId);
   if (!d) return { kind: "dispute", id: disputeId, label: `Dispute #${disputeId}` };
+  const byCategory = new Map<string, number>();
+  for (const item of evidenceItems) {
+    byCategory.set(item.category, (byCategory.get(item.category) ?? 0) + 1);
+  }
   return {
     kind: "dispute",
     id: d.id,
@@ -79,6 +90,8 @@ export function buildDisputeContext(disputeId: string): PageContext {
       openedAt: d.openedAt,
       evidenceDueAt: d.evidenceDueAt,
       evidenceStatus: d.evidenceStatus,
+      status: d.status,
+      evidenceSummary: Array.from(byCategory, ([category, count]) => ({ category, count })),
     },
   };
 }

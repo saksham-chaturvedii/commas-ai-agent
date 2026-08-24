@@ -81,7 +81,7 @@ function AppShell() {
   /** Context for the floating button / panel, based on where the user currently is. */
   const currentContext: PageContext | undefined =
     view === "resolution-center" && rcView === "detail"
-      ? buildDisputeContext(selectedDisputeId)
+      ? buildDisputeContext(selectedDisputeId, evidenceByDispute[selectedDisputeId])
       : view === "dashboard"
         ? DASHBOARD_CONTEXT
         : undefined;
@@ -125,7 +125,9 @@ function AppShell() {
                     setRcView("list");
                     setPanelOpen(false); // same stale-context rule as sidebar navigation (P1-1)
                   }}
-                  onInvestigate={() => openPanel(buildDisputeContext(selectedDisputeId))}
+                  onInvestigate={() =>
+                    openPanel(buildDisputeContext(selectedDisputeId, evidenceByDispute[selectedDisputeId]))
+                  }
                 />
               )}
               {view === "chat" && <ChatPage activeChatId={chatPageActiveId} onSelectChat={setChatPageActiveId} />}

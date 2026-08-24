@@ -91,6 +91,29 @@ export interface StreamAgentMessageArgs {
   disputeId?: string;
   message: string;
   history: ConversationTurn[];
+  /** Kept the server-side session's context current (docs/AI_ASSISTANT_ARCHITECTURE.md §5) —
+   * see server/app.ts's `SharedAgentStreamRequest` / server/agent/context/model.ts's
+   * `DisputeFacts`. Wire shape mirrored by hand, same as every other server/types.ts type. */
+  enabledSources?: SourceId[];
+  dispute?: {
+    disputeId: string;
+    customerId: string;
+    customerName: string;
+    transactionId: string;
+    reason: string;
+    status: string;
+    evidenceStatus: "not_started" | "in_progress" | "ready";
+    evidenceSummary: { category: string; count: number }[];
+  };
+  workspace?: { disputesNeedingAttention: WorkspaceDisputeSummary[] };
+}
+
+export interface WorkspaceDisputeSummary {
+  disputeId: string;
+  customerName: string;
+  reason: string;
+  amountCents: number;
+  evidenceDueAt: string;
 }
 
 function parseSSEFrame(raw: string): { event: string; data: string } {

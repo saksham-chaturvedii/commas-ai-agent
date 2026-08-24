@@ -71,6 +71,13 @@ export interface DisputeContextDetail {
   openedAt: string;
   evidenceDueAt: string;
   evidenceStatus: "not_started" | "in_progress" | "ready";
+  /** The dispute's lifecycle status (src/lib/disputeData.ts's DisputeStatus) — distinct from
+   * evidenceStatus above, which tracks response readiness, not the dispute's own outcome. */
+  status: "Needs response" | "Won";
+  /** Seller-gathered evidence, summarized by checklist category (title/full record never
+   * sent — see src/lib/mockData.ts's buildDisputeContext) so the agent can answer "what
+   * evidence do we have" without a tool call, without inflating the request payload. */
+  evidenceSummary: { category: string; count: number }[];
 }
 
 export interface PageContext {

@@ -4,6 +4,7 @@ import type { Hono } from "hono";
 import { createApp } from "../../server/app.js";
 import { SessionStore } from "../../server/agent/sessions/store.js";
 import { buildContextPrompt } from "../../server/agent/context/buildContext.js";
+import { buildAgentContext, agentContextFromPageContext } from "../../server/agent/context/model.js";
 import { runSharedAgent, type AgentStreamEvent } from "../../server/agent/runtime/sharedAgent.js";
 import { StubStreamClient } from "../../server/llm/streaming/stubStreamClient.js";
 
@@ -82,28 +83,53 @@ describe("SessionStore", () => {
     ]);
   });
 
-  it("discards a session whose stored config disagrees with the request (dispute -> global)", () => {
+  it("discards a session whose stored config disagrees with the request (dispute -> global) — transcript AND context both reset, never inherited", () => {
     const store = new SessionStore();
     const disputeSession = store.resolve("chat-1", { mode: "dispute", disputeId: "2481" });
     disputeSession.transcript.push({ role: "user", text: "about #2481" }, { role: "assistant", text: "..." });
+    store.updateContext(
+      "chat-1",
+      buildAgentContext({
+        conversationId: "chat-1",
+        conversationType: "dispute",
+        dispute: disputeFacts({ customerName: "Sarah Johnson" }),
+      }),
+    );
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Simulates the real product: the seller closes the dispute panel and returns to global
+    // chat — the critical isolation requirement is that global chat never silently inherits
+    // the dispute-specific context that was just active, even reusing the same chat/session id.
     const globalSession = store.resolve("chat-1", { mode: "global" });
     warn.mockRestore();
 
     expect(globalSession.config).toEqual({ mode: "global" });
     expect(globalSession.transcript).toEqual([]); // fresh, not the dispute transcript
+    expect(globalSession.context.conversationType).toBe("global");
+    expect(globalSession.context.dispute).toBeUndefined(); // never Sarah Johnson's facts
     expect(globalSession).not.toBe(disputeSession);
   });
 
-  it("discards a session whose stored config disagrees with the request (same dispute id required)", () => {
+  it("discards a session whose stored config disagrees with the request (same dispute id required) — switching disputes never carries the old dispute's context forward", () => {
     const store = new SessionStore();
     store.resolve("chat-1", { mode: "dispute", disputeId: "2481" });
+    store.updateContext(
+      "chat-1",
+      buildAgentContext({
+        conversationId: "chat-1",
+        conversationType: "dispute",
+        dispute: disputeFacts({ disputeId: "2481", customerName: "Sarah Johnson" }),
+      }),
+    );
+
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // The exact scenario the task calls out: a chat id somehow reused across two different
+    // disputes (e.g. #2481 -> #3102) must not leak #2481's facts into #3102's context.
     const other = store.resolve("chat-1", { mode: "dispute", disputeId: "3102" });
     warn.mockRestore();
     expect(other.config).toEqual({ mode: "dispute", disputeId: "3102" });
     expect(other.transcript).toEqual([]);
+    expect(other.context.dispute).toBeUndefined(); // bare — not #2481's facts, not yet #3102's either
   });
 
   it("delete removes a session so a later resolve creates a genuinely new one", () => {
@@ -117,29 +143,119 @@ describe("SessionStore", () => {
   });
 });
 
+function disputeFacts(overrides: Partial<Parameters<typeof buildAgentContext>[0]["dispute"]> = {}) {
+  return {
+    disputeId: "2481",
+    customerId: "sarah.johnson@email.com",
+    customerName: "Sarah Johnson",
+    transactionId: "txn_1",
+    reason: "product_not_received",
+    status: "Needs response",
+    evidenceStatus: "not_started" as const,
+    evidenceSummary: [],
+    ...overrides,
+  };
+}
+
 describe("buildContextPrompt", () => {
   it("global mode: no dispute framing", () => {
-    const prompt = buildContextPrompt({
-      sessionId: "s",
-      config: { mode: "global" },
-      transcript: [],
-      createdAt: "",
-      updatedAt: "",
-    });
+    const context = buildAgentContext({ conversationId: "s", conversationType: "global" });
+    const prompt = buildContextPrompt(context);
     expect(prompt).toContain("general workspace conversation");
     expect(prompt).not.toContain("Dispute #");
   });
 
-  it("dispute mode: names the specific dispute and is honest about not having tools yet", () => {
-    const prompt = buildContextPrompt({
-      sessionId: "s",
-      config: { mode: "dispute", disputeId: "2481" },
-      transcript: [],
-      createdAt: "",
-      updatedAt: "",
-    });
+  it("dispute mode: names the specific dispute and states its known facts", () => {
+    const context = buildAgentContext({ conversationId: "s", conversationType: "dispute", dispute: disputeFacts() });
+    const prompt = buildContextPrompt(context);
     expect(prompt).toContain("Dispute #2481");
-    expect(prompt.toLowerCase()).toContain("do not have dispute-investigation tools");
+    expect(prompt).toContain("Sarah Johnson");
+    expect(prompt).toContain("sarah.johnson@email.com");
+  });
+
+  it("dispute mode: states gathered evidence from the summary, or says plainly there is none", () => {
+    const empty = buildContextPrompt(
+      buildAgentContext({ conversationId: "s", conversationType: "dispute", dispute: disputeFacts() }),
+    );
+    expect(empty).toContain("No evidence has been gathered");
+
+    const withEvidence = buildContextPrompt(
+      buildAgentContext({
+        conversationId: "s",
+        conversationType: "dispute",
+        dispute: disputeFacts({ evidenceSummary: [{ category: "Customer communications", count: 2 }] }),
+      }),
+    );
+    expect(withEvidence).toContain("Customer communications (2)");
+  });
+
+  it("global mode: surfaces the workspace's disputes-needing-attention summary", () => {
+    const withNone = buildContextPrompt(buildAgentContext({ conversationId: "s", conversationType: "global" }));
+    expect(withNone).toContain("no disputes needing a response");
+
+    const withOne = buildContextPrompt(
+      buildAgentContext({
+        conversationId: "s",
+        conversationType: "global",
+        workspace: {
+          disputesNeedingAttention: [
+            { disputeId: "2481", customerName: "Sarah Johnson", reason: "product_not_received", amountCents: 49900, evidenceDueAt: "2026-08-23" },
+          ],
+        },
+      }),
+    );
+    expect(withOne).toContain("Dispute #2481");
+    expect(withOne).toContain("Sarah Johnson");
+  });
+
+  it("a dispute-mode context never contains another dispute's facts, and global mode never contains dispute facts at all", () => {
+    const a = buildContextPrompt(buildAgentContext({ conversationId: "s", conversationType: "dispute", dispute: disputeFacts({ disputeId: "2481", customerName: "Sarah Johnson" }) }));
+    const b = buildContextPrompt(buildAgentContext({ conversationId: "s", conversationType: "dispute", dispute: disputeFacts({ disputeId: "2390", customerName: "Priya Nair" }) }));
+    expect(a).toContain("Sarah Johnson");
+    expect(a).not.toContain("Priya Nair");
+    expect(b).toContain("Priya Nair");
+    expect(b).not.toContain("Sarah Johnson");
+
+    const global = buildContextPrompt(buildAgentContext({ conversationId: "s", conversationType: "global" }));
+    expect(global).not.toContain("Sarah Johnson");
+    expect(global).not.toContain("Priya Nair");
+  });
+});
+
+describe("agentContextFromPageContext (legacy runtime's adapter onto the shared context model)", () => {
+  it("maps a dispute PageContext onto the same AgentContext shape the shared agent uses", () => {
+    const context = agentContextFromPageContext("dispute-chat-1", {
+      kind: "dispute",
+      id: "2481",
+      label: "Dispute #2481 — Sarah Johnson",
+      dispute: {
+        customerName: "Sarah Johnson",
+        customerEmail: "sarah.johnson@email.com",
+        transactionId: "txn_1",
+        amountCents: 49900,
+        reason: "product_not_received",
+        openedAt: "2026-08-09T00:00:00Z",
+        evidenceDueAt: "2026-08-23T00:00:00Z",
+        evidenceStatus: "not_started",
+        status: "Needs response",
+        evidenceSummary: [{ category: "Transaction & payment details", count: 1 }],
+      },
+    });
+    expect(context.conversationType).toBe("dispute");
+    expect(context.dispute).toMatchObject({
+      disputeId: "2481",
+      customerId: "sarah.johnson@email.com",
+      customerName: "Sarah Johnson",
+    });
+    const prompt = buildContextPrompt(context);
+    expect(prompt).toContain("Dispute #2481");
+    expect(prompt).toContain("Transaction & payment details (1)");
+  });
+
+  it("a context-less PageContext (dashboard) maps to global, not dispute", () => {
+    const context = agentContextFromPageContext("dashboard-chat", { kind: "dashboard", id: "dashboard", label: "Dashboard" });
+    expect(context.conversationType).toBe("global");
+    expect(context.dispute).toBeUndefined();
   });
 });
 
@@ -219,6 +335,67 @@ describe("runSharedAgent (StubStreamClient)", () => {
     expect(store.get("chat-1")!.transcript).toHaveLength(4);
   });
 
+  it("dispute mode adds the runtime's own no-tools-yet caveat; buildContextPrompt itself stays tool-agnostic (see buildContextPrompt tests above)", async () => {
+    const store = new SessionStore();
+    const seenPrompts: string[] = [];
+    const client = new StubStreamClient();
+    const originalStreamReply = client.streamReply.bind(client);
+    client.streamReply = (args) => {
+      seenPrompts.push(args.systemPrompt);
+      return originalStreamReply(args);
+    };
+
+    await runSharedAgent({
+      sessionId: "chat-1",
+      config: { mode: "dispute", disputeId: "2481" },
+      userMessage: "what evidence do we have?",
+      requestContext: {
+        dispute: {
+          disputeId: "2481",
+          customerId: "sarah.johnson@email.com",
+          customerName: "Sarah Johnson",
+          transactionId: "txn_1",
+          reason: "product_not_received",
+          status: "Needs response",
+          evidenceStatus: "not_started",
+          evidenceSummary: [],
+        },
+      },
+      llmClient: client,
+      sessionStore: store,
+      onEvent: () => {},
+    });
+
+    expect(seenPrompts[0]).toContain("Dispute #2481");
+    expect(seenPrompts[0].toLowerCase()).toContain("do not have live investigation tools");
+  });
+
+  it("tracks investigation progress on the session's own context — advances only after a turn completes", async () => {
+    const store = new SessionStore();
+    const session = store.resolve("chat-1", { mode: "dispute", disputeId: "2481" });
+    expect(session.context.investigation).toEqual({ status: "not_started", turnsCompleted: 0 });
+
+    await runSharedAgent({
+      sessionId: "chat-1",
+      config: { mode: "dispute", disputeId: "2481" },
+      userMessage: "hello",
+      llmClient: new StubStreamClient(),
+      sessionStore: store,
+      onEvent: () => {},
+    });
+    expect(store.get("chat-1")!.context.investigation).toEqual({ status: "in_progress", turnsCompleted: 1 });
+
+    await runSharedAgent({
+      sessionId: "chat-1",
+      config: { mode: "dispute", disputeId: "2481" },
+      userMessage: "thanks",
+      llmClient: new StubStreamClient(),
+      sessionStore: store,
+      onEvent: () => {},
+    });
+    expect(store.get("chat-1")!.context.investigation).toEqual({ status: "in_progress", turnsCompleted: 2 });
+  });
+
   it("emits an error event (not a throw) when the LLM client rejects", async () => {
     const store = new SessionStore();
     const events: AgentStreamEvent[] = [];
@@ -291,7 +468,7 @@ describe("runSharedAgent (StubStreamClient)", () => {
     const first = runSharedAgent({
       sessionId: "chat-1",
       config: { mode: "global" },
-      userMessage: "hello", // FALLBACK_REPLY — many words, many chunk delays, finishes slower
+      userMessage: "hello", // GREETING_REPLY — many words, many chunk delays, finishes slower
       llmClient: client,
       sessionStore: store,
       onEvent: () => {},
@@ -314,6 +491,107 @@ describe("runSharedAgent (StubStreamClient)", () => {
       "thanks",
       transcript[3].text,
     ]);
+  });
+});
+
+describe("context isolation (critical requirement: switching disputes never leaks, returning to global never inherits)", () => {
+  it("two different dispute chats sharing one SessionStore never see each other's facts, end to end", async () => {
+    // Mirrors the real app: each dispute gets its own chat/session id (App.tsx dedupes chats by
+    // context kind+id), so #2481 and #2390 are two entirely separate sessions in the SAME store
+    // instance a running server actually uses (one SessionStore per createApp()).
+    const store = new SessionStore();
+    const client = new StubStreamClient();
+    const eventsA: AgentStreamEvent[] = [];
+    const eventsB: AgentStreamEvent[] = [];
+
+    await runSharedAgent({
+      sessionId: "chat-2481",
+      config: { mode: "dispute", disputeId: "2481" },
+      userMessage: "what evidence do we have?",
+      requestContext: {
+        dispute: disputeFacts({
+          disputeId: "2481",
+          customerName: "Sarah Johnson",
+          evidenceSummary: [{ category: "Transaction & payment details", count: 1 }],
+        }),
+      },
+      llmClient: client,
+      sessionStore: store,
+      onEvent: (e) => { eventsA.push(e); },
+    });
+    await runSharedAgent({
+      sessionId: "chat-2390",
+      config: { mode: "dispute", disputeId: "2390" },
+      userMessage: "what evidence do we have?",
+      requestContext: {
+        dispute: disputeFacts({
+          disputeId: "2390",
+          customerName: "Priya Nair",
+          evidenceSummary: [{ category: "Customer communications", count: 3 }],
+        }),
+      },
+      llmClient: client,
+      sessionStore: store,
+      onEvent: (e) => { eventsB.push(e); },
+    });
+
+    const doneA = eventsA.find((e): e is Extract<AgentStreamEvent, { type: "done" }> => e.type === "done")!.text;
+    const doneB = eventsB.find((e): e is Extract<AgentStreamEvent, { type: "done" }> => e.type === "done")!.text;
+    expect(doneA).toContain("Transaction & payment details");
+    expect(doneA).not.toContain("Customer communications");
+    expect(doneA).not.toContain("2390");
+    expect(doneB).toContain("Customer communications");
+    expect(doneB).not.toContain("Transaction & payment details");
+    expect(doneB).not.toContain("2481");
+
+    expect(store.get("chat-2481")!.context.dispute?.customerName).toBe("Sarah Johnson");
+    expect(store.get("chat-2390")!.context.dispute?.customerName).toBe("Priya Nair");
+  });
+
+  it("returning to global chat on the same session id never inherits the dispute it just left", async () => {
+    const store = new SessionStore();
+    const client = new StubStreamClient();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const disputeEvents: AgentStreamEvent[] = [];
+    await runSharedAgent({
+      sessionId: "chat-1",
+      config: { mode: "dispute", disputeId: "2481" },
+      userMessage: "what evidence do we have?",
+      requestContext: {
+        dispute: disputeFacts({
+          disputeId: "2481",
+          customerName: "Sarah Johnson",
+          evidenceSummary: [{ category: "Transaction & payment details", count: 1 }],
+        }),
+      },
+      llmClient: client,
+      sessionStore: store,
+      onEvent: (e) => { disputeEvents.push(e); },
+    });
+
+    const globalEvents: AgentStreamEvent[] = [];
+    await runSharedAgent({
+      sessionId: "chat-1", // same id — the scope-mismatch guard is what must protect this
+      config: { mode: "global" },
+      userMessage: "what evidence do we have?", // same question, now with no dispute in scope
+      llmClient: client,
+      sessionStore: store,
+      onEvent: (e) => { globalEvents.push(e); },
+    });
+    warn.mockRestore();
+
+    const disputeAnswer = disputeEvents.find((e): e is Extract<AgentStreamEvent, { type: "done" }> => e.type === "done")!.text;
+    const globalAnswer = globalEvents.find((e): e is Extract<AgentStreamEvent, { type: "done" }> => e.type === "done")!.text;
+    expect(disputeAnswer).toContain("Transaction & payment details");
+    // The exact same question, asked right after in the same slot, gets the generic fallback —
+    // not Sarah Johnson's evidence — because global mode has no `dispute` in its context at all.
+    expect(globalAnswer).not.toContain("Transaction & payment details");
+    expect(globalAnswer).not.toContain("Sarah Johnson");
+    expect(globalAnswer).not.toContain("2481");
+
+    expect(store.get("chat-1")!.context.conversationType).toBe("global");
+    expect(store.get("chat-1")!.context.dispute).toBeUndefined();
   });
 });
 

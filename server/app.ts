@@ -12,11 +12,12 @@ import { AgentError, classifyError } from "./agent/errors.js";
 import { StubLlmClient } from "./llm/stubClient.js";
 import { AnthropicLlmClient } from "./llm/anthropicClient.js";
 import type { LlmClient } from "./llm/types.js";
-import type { AgentApproveRequest, AgentRunRequest, AgentRunResponse, ConversationTurn } from "./types.js";
+import type { AgentApproveRequest, AgentRunRequest, AgentRunResponse, ConversationTurn, SourceId } from "./types.js";
 // --- shared agent runtime (docs/AI_ASSISTANT_ARCHITECTURE.md) — additive, alongside the legacy
 // runtime/LLM client imports above, which remain exactly as they were.
 import { SessionStore, type SessionConfig } from "./agent/sessions/store.js";
 import { runSharedAgent } from "./agent/runtime/sharedAgent.js";
+import type { DisputeFacts, WorkspaceDisputeSummary } from "./agent/context/model.js";
 import { AnthropicStreamClient } from "./llm/streaming/anthropicStreamClient.js";
 import { StubStreamClient } from "./llm/streaming/stubStreamClient.js";
 import type { StreamingLlmClient } from "./llm/streaming/types.js";
@@ -34,6 +35,12 @@ interface SharedAgentStreamRequest {
   message: string;
   /** Only used to bootstrap a brand-new server-side session — see `SessionStore.resolve`. */
   history?: ConversationTurn[];
+  /** Kept this session's `AgentContext` current (docs/AI_ASSISTANT_ARCHITECTURE.md §5) — see
+   * server/agent/runtime/sharedAgent.ts's `RunSharedAgentRequestContext`. All optional: a
+   * request that omits them just falls back to whatever the session already knew. */
+  enabledSources?: SourceId[];
+  dispute?: DisputeFacts;
+  workspace?: { disputesNeedingAttention: WorkspaceDisputeSummary[] };
 }
 
 /**
@@ -212,6 +219,11 @@ export async function createApp() {
         config,
         userMessage: body.message,
         bootstrapHistory,
+        requestContext: {
+          connectedSources: body.enabledSources,
+          dispute: config.mode === "dispute" ? body.dispute : undefined,
+          workspace: config.mode === "global" ? body.workspace : undefined,
+        },
         llmClient: streamingLlmClient,
         sessionStore,
         signal: c.req.raw.signal,

@@ -2,6 +2,8 @@ import type { SourceAdapter } from "../adapters/types.js";
 import type { RegisteredTool } from "./registry.js";
 import type { LlmClient, LlmToolDef, ToolCallRecord } from "../llm/types.js";
 import { AgentError, classifyError } from "./errors.js";
+import { agentContextFromPageContext } from "./context/model.js";
+import { buildContextPrompt } from "./context/buildContext.js";
 import type {
   AgentRunResponse,
   ConversationTurn,
@@ -217,25 +219,25 @@ function buildApprovalSummary(registered: RegisteredTool | undefined, input: Rec
   return `Run ${registered?.displayName ?? "this action"}.`;
 }
 
+/**
+ * Builds the tool-calling loop's system prompt from the shared context model
+ * (server/agent/context/{model,buildContext}.ts) — the same representation and rendering the
+ * shared agent runtime uses, so "GLOBAL vs DISPUTE, and which dispute" is decided in exactly one
+ * place across both runtimes, not reimplemented here. This runtime stays stateless by design
+ * (no session — see server/agent/README.md), so it builds a fresh `AgentContext` from this
+ * request's own `PageContext` every call; there's nothing here for one call to leak into another.
+ * The tool-availability prose (below) is a separate concern the shared context model doesn't
+ * cover yet (it has no tool inventory — see server/agent/tools/index.ts), so it's appended here,
+ * specific to this runtime's real tool-calling loop.
+ */
 function buildSystemPrompt(context?: PageContext): string {
-  const base =
+  const toolsPrefix =
     "You are the Commas AI Agent. Help the seller by looking up customers, transactions, and " +
     "disputes in Commas, and by checking their connected apps (Google Calendar, Zoom, Fathom, " +
-    "Gmail, GoHighLevel) when useful. Be concise and direct. Never state a fact about their data that " +
-    "didn't come from a tool result. Decide for yourself which tools you need and in what " +
-    "order — don't assume a fixed sequence.";
-
-  if (context?.kind === "dispute") {
-    const d = context.dispute;
-    const facts = d
-      ? ` Known facts: customer ${d.customerName} (${d.customerEmail}), transaction ${d.transactionId}, ` +
-        `$${(d.amountCents / 100).toFixed(2)}, reason "${d.reason}", opened ${d.openedAt}, evidence due ` +
-        `${d.evidenceDueAt}, response status "${d.evidenceStatus}". Use these directly — don't re-fetch ` +
-        `what you already know.`
-      : "";
-    return `${base} The seller is currently viewing ${context.label} — assume questions about "this dispute" refer to it.${facts}`;
-  }
-  return base;
+    "Gmail, GoHighLevel) when useful. Decide for yourself which tools you need and in what " +
+    "order — don't assume a fixed sequence, and never state a fact about their data that didn't " +
+    "come from a tool result.\n\n";
+  return toolsPrefix + buildContextPrompt(agentContextFromPageContext(context?.id ?? "no-context", context));
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

@@ -37,6 +37,8 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       openedAt: "2026-08-09T00:00:00Z",
       evidenceDueAt: "2026-08-23T00:00:00Z",
       evidenceStatus: "not_started",
+      status: "Needs response",
+      evidenceSummary: [],
     },
   };
 
@@ -312,6 +314,8 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         openedAt: "August 17, 2026",
         evidenceDueAt: "August 31, 2026",
         evidenceStatus: "in_progress",
+        status: "Needs response",
+        evidenceSummary: [],
       },
     };
 

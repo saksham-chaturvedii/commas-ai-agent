@@ -293,6 +293,26 @@ export function getDispute(id: string): DisputeCase | undefined {
   return DISPUTES.find((d) => d.id === id);
 }
 
+/** Workspace-level summary for GLOBAL chat's agent context (docs/AI_ASSISTANT_ARCHITECTURE.md
+ * §5) — e.g. "Show me disputes that need attention." Deliberately a thin projection (no
+ * agent-reasoning fields) of the same DISPUTES this file already exports for the Resolution
+ * Center list, not a separate dataset. */
+export function disputesNeedingAttention(): {
+  disputeId: string;
+  customerName: string;
+  reason: string;
+  amountCents: number;
+  evidenceDueAt: string;
+}[] {
+  return DISPUTES.filter((d) => d.status === "Needs response").map((d) => ({
+    disputeId: d.id,
+    customerName: d.customer.name,
+    reason: d.reason,
+    amountCents: Math.round(parseFloat(d.amount.replace(/[^0-9.]/g, "")) * 100),
+    evidenceDueAt: d.evidenceDueAt,
+  }));
+}
+
 export type EvidenceSourceType =
   | "transaction"
   | "activity"

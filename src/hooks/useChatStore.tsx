@@ -11,6 +11,7 @@ import type {
   SourceInfo,
 } from "../lib/types";
 import { DEFAULT_ENABLED_SOURCES, INITIAL_CREDITS, SEED_CHATS, SOURCES } from "../lib/mockData";
+import { disputesNeedingAttention } from "../lib/disputeData";
 import {
   runAgentTurn,
   approveAgentAction,
@@ -516,7 +517,14 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       void (async () => {
         try {
           await streamAgentMessage(
-            { sessionId: chatId, mode: "global", message: trimmed, history },
+            {
+              sessionId: chatId,
+              mode: "global",
+              message: trimmed,
+              history,
+              enabledSources: chat.enabledSources,
+              workspace: { disputesNeedingAttention: disputesNeedingAttention() },
+            },
             (delta) => appendStreamDelta(chatId, messageId, delta),
             controller.signal,
           );

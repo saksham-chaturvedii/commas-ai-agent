@@ -4,6 +4,8 @@ import { act, render, screen, fireEvent, cleanup } from "@testing-library/react"
 import { ChatStoreProvider, useChatStore } from "../src/hooks/useChatStore";
 import { ChatWorkspace } from "../src/components/chat/ChatWorkspace";
 import type { Chat } from "../src/lib/types";
+import { DEFAULT_ENABLED_SOURCES } from "../src/lib/mockData";
+import { disputesNeedingAttention } from "../src/lib/disputeData";
 
 function Harness() {
   const { createChat, chats } = useChatStore();
@@ -104,6 +106,13 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
       mode: "global",
       message: "Summarize my sales this month",
       history: [],
+      // GLOBAL chat's own context envelope (docs/AI_ASSISTANT_ARCHITECTURE.md §5) — this
+      // chat's enabled sources, plus a workspace-level summary computed from the same
+      // src/lib/disputeData.ts the Resolution Center list itself renders from (never a
+      // separate, hand-duplicated dataset — see tests/server/sharedAgent.test.ts for the
+      // context model's own coverage).
+      enabledSources: DEFAULT_ENABLED_SOURCES,
+      workspace: { disputesNeedingAttention: disputesNeedingAttention() },
     });
 
     await act(async () => {

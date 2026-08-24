@@ -29,9 +29,9 @@ Build a real AI assistant inside the existing Commas AI Agent prototype that can
 
 ## Current phase
 
-**2 — Foundational shared agent runtime (implemented, live-verified)**
+**3 — Shared agent context and session model (implemented, live-verified)**
 
-The shared agent from `AI_ASSISTANT_ARCHITECTURE.md` §2–§4 is real, running code: one runtime, one session abstraction with GLOBAL/DISPUTE modes, real streaming to a real LLM (or a genuinely-chunked deterministic stub when no key is configured), reachable end-to-end from the existing, unredesigned global Chat UI. The legacy `server/agent/runtime.ts` loop — and therefore the Resolution Center's entire "Investigate with AI" flow, including tool calls and the write-approval pause — is untouched and was re-verified live, not just left alone in theory.
+The context model from `AI_ASSISTANT_ARCHITECTURE.md` §5 is real, running code, shared by BOTH runtimes: one `AgentContext` type capable of representing conversation id/type, active dispute/customer/transaction id, dispute reason/status, connected sources, gathered evidence, investigation progress, and pending actions (§4's placeholder). GLOBAL chat gets broad workspace context (a live "disputes needing attention" summary); DISPUTE chat gets its dispute's facts automatically, and follow-ups work without repeating the dispute id — both verified live in-browser, not just in tests. The critical isolation requirement (switching disputes never leaks; returning to global never inherits) is enforced structurally by the session store's scope-mismatch guard and covered by dedicated tests.
 
 ## Phase log
 
@@ -40,7 +40,8 @@ The shared agent from `AI_ASSISTANT_ARCHITECTURE.md` §2–§4 is real, running 
 | 0 | Baseline documentation (`AI_ASSISTANT_BASELINE.md`, this file) | ✅ Complete — 2026-08-24 |
 | 1 | Architecture definition (`AI_ASSISTANT_ARCHITECTURE.md`) — one shared agent, two modes; stack, session/context, tools, actions, persistence, risks, sequencing | ✅ Analyzed, not implemented — 2026-08-24 |
 | 2 | Foundational shared agent runtime — session/context/runtime modules, streaming LLM client (real + stub), `POST /api/agent/stream`, global-chat wiring | ✅ Implemented, live-verified — 2026-08-24 |
-| 3 | One dataset + wider Commas/connector tools with citations, wired into the shared agent's own tool-calling loop | ⏳ Next |
+| 3 | Shared agent context and session model — `AgentContext` (dispute facts, evidence, workspace summary, investigation progress), unified into both runtimes, isolation-tested | ✅ Implemented, live-verified — 2026-08-24 |
+| 4 | Real tool-calling wired into the shared agent's own loop (currently only the legacy runtime has live tools) | ⏳ Next |
 
 ## Phase 2 — what was built
 
@@ -144,24 +145,101 @@ Before committing, the full Phase 2 diff was run through an independent 4-review
 
 All four fixes have dedicated regression tests (`tests/server/sharedAgent.test.ts`: concurrent-session ordering, abort-vs-unrelated-error, malformed history entry; `tests/ChatFlow.test.tsx`: delete-mid-stream vs. a newer active run). Full suite: **118/118 passing**, `tsc --noEmit` clean, `npm run build` clean.
 
+## Phase 3 — what was built
+
+### The context model
+
+`server/agent/context/model.ts` (new) defines `AgentContext` — the one type both runtimes now build their system prompt from, capable of representing every field the task asked for:
+
+| Requirement | Field | Source |
+|---|---|---|
+| Conversation id / type | `conversationId`, `conversationType` | session id, `SessionConfig.mode` |
+| Active dispute / customer / transaction id | `dispute.{disputeId, customerId, transactionId}` | `PageContext.dispute` (customer**Id** = customer**Email** — this prototype has no separate id scheme, see model.ts's doc comment) |
+| Dispute reason / status | `dispute.{reason, status}` | `PageContext.dispute` (`status` is new this phase — the dispute's lifecycle status, distinct from the pre-existing `evidenceStatus`) |
+| Connected sources | `connectedSources` | `chat.enabledSources` |
+| Gathered evidence | `dispute.evidenceSummary` | `App.tsx`'s `evidenceByDispute`, summarized by checklist category — new this phase (baseline noted the agent couldn't see this at all before) |
+| Investigation progress | `investigation: {status, turnsCompleted}` | the shared agent's own session, incremented only after a turn completes |
+| Pending/recommended actions | `pendingActions` | typed `never[]` — always empty; the propose/approve pipeline (§7) doesn't exist yet, so this documents the slot without inventing a shape ahead of it |
+| GLOBAL's "broad workspace context" | `workspace.disputesNeedingAttention` | `src/lib/disputeData.ts`'s new `disputesNeedingAttention()` — the same `DISPUTES` the Resolution Center list already renders from, not a separate dataset |
+
+`buildContextPrompt(context)` (`server/agent/context/buildContext.ts`, rewritten) renders this into prose — the *only* place GLOBAL vs. DISPUTE, and which dispute, changes the model's system prompt. It's tool-availability-agnostic on purpose: the shared agent (no tools yet) appends its own "you don't have live investigation tools" caveat itself; the legacy runtime (real tools) doesn't.
+
+### One context model, two runtimes — not two backends
+
+`agentContextFromPageContext(conversationId, PageContext)` (also in `context/model.ts`) adapts the legacy runtime's own per-request `PageContext` into the identical `AgentContext` shape. `server/agent/runtime.ts`'s `buildSystemPrompt` was refactored to call this + `buildContextPrompt` instead of its own inline prompt string — the concrete change that makes "one shared agent architecture with scoped context, not two separate agent backends" true at the context layer for **both** runtimes, not just the one already using the shared session store. The legacy runtime's real tool-calling loop and write-approval pause are completely untouched — this was a pure-function swap only, verified by the full existing `runtime.test.ts`/`disputeIntents.test.ts` suite passing unmodified.
+
+### Session-level state
+
+`SessionRecord` (`server/agent/sessions/store.ts`) now carries its own `context: AgentContext`, replaced wholesale (never merged) every turn by `runSharedAgent` from that turn's fresh facts — so a dispute whose evidence changed, or a session that's never seen dispute facts at all, can never hold stale ones. `SessionStore.updateContext()` is the only mutator. Investigation progress (`turnsCompleted`) is the one field that's genuinely session-memory rather than resent-per-request: it advances only after a turn actually completes.
+
+### Isolation — the critical requirement
+
+Enforced structurally, not just by convention: `SessionStore.resolve()`'s pre-existing scope-mismatch guard (Phase 2) discards and rebuilds the **entire** `SessionRecord`, context included, whenever a session id's stored config disagrees with the request — so a chat id reused from dispute #2481 to #2390, or from a dispute back to global, always gets a bare fresh context, never the old one's facts. In the real app this is normally moot (App.tsx gives each dispute its own chat id), but the guard is what protects the edge case, and it's now proven for the context field specifically, not just the transcript:
+- `tests/server/sharedAgent.test.ts` — "context isolation" describe block: two live dispute sessions (`#2481`/`#2390`) sharing one `SessionStore` never answer with each other's facts; the same session id returning to global mode never inherits the dispute it just left, exercised end-to-end through `runSharedAgent` + `StubStreamClient`, not just asserted on data structures.
+- The two pre-existing "discards a session whose stored config disagrees" tests were extended to assert `context.dispute` is reset, not just `transcript`.
+- `tests/DisputeContext.test.tsx` (new) — `buildDisputeContext` never lets one dispute's evidence summary leak into another's, back-to-back calls.
+
+**Live-verified in-browser**, both servers running, stub LLM (no `ANTHROPIC_API_KEY`):
+1. Global chat, fresh: "Show me disputes that need attention" → correctly answered from the live workspace summary — all 4 open disputes with customer/amount/reason, Priya Nair's resolved #2390 correctly excluded. Proves the GLOBAL requirement end to end, not just in tests.
+2. Dispute #2481 (Sarah Johnson), an existing chat: asked "What evidence do we have?" with **no dispute id mentioned** — correctly answered about #2481 specifically (the pre-existing legacy investigation flow, unaffected by the `buildSystemPrompt` refactor). Proves the "follow-ups work without repeating the dispute id" requirement live.
+3. Same chat: "Investigate this dispute" and "mark the response ready" still produced the exact same real multi-source investigation and write/approval round trip as Phase 2's walkthrough — zero regression from the runtime.ts refactor.
+4. Console: no errors.
+
+### The stub client is now genuinely context-grounded
+
+`StreamReplyArgs` (`server/llm/streaming/types.ts`) gained an optional `context: AgentContext` field, passed alongside `systemPrompt` — mirroring the legacy `LlmClient.nextStep()`'s own `context` parameter. `StubStreamClient` uses it to answer "disputes needing attention" (global) and "what evidence do we have" / "draft a response" (dispute) from the real structured facts instead of a fixed fallback string — this is what made live verification #1 above possible without a live model. `AnthropicStreamClient` ignores the field; a real model needs only the rendered prose.
+
+### Files created
+
+| File | Purpose |
+|---|---|
+| `server/agent/context/model.ts` | `AgentContext`/`DisputeFacts`/`WorkspaceDisputeSummary` types, `buildAgentContext()`, `agentContextFromPageContext()` |
+| `tests/DisputeContext.test.tsx` | Frontend isolation coverage for `buildDisputeContext`/`disputesNeedingAttention` |
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `server/agent/context/buildContext.ts` | Rewritten: takes `AgentContext` (not a `SessionRecord`), renders dispute facts/evidence/sources/investigation progress or the workspace summary; no longer tool-availability-specific |
+| `server/agent/sessions/store.ts` | `SessionRecord.context: AgentContext`, `+ updateContext()` |
+| `server/agent/runtime/sharedAgent.ts` | Builds a fresh `AgentContext` from `requestContext` each turn, stores it, renders the prompt from it, tracks `investigation.turnsCompleted`, appends its own no-tools caveat |
+| `server/agent/runtime.ts` | `buildSystemPrompt` now calls `agentContextFromPageContext` + `buildContextPrompt` instead of its own inline prompt |
+| `server/app.ts` | `SharedAgentStreamRequest` gains `enabledSources`/`dispute`/`workspace`, forwarded to `runSharedAgent` |
+| `server/llm/streaming/types.ts` | `StreamReplyArgs.context: AgentContext` |
+| `server/llm/streaming/stubStreamClient.ts` | Context-grounded replies for workspace/evidence/draft questions |
+| `src/lib/types.ts`, `server/types.ts` | `DisputeContextDetail` gains `status`, `evidenceSummary` |
+| `src/lib/mockData.ts` | `buildDisputeContext(disputeId, evidenceItems?)` — now computes `status`/`evidenceSummary` |
+| `src/lib/disputeData.ts` | `+ disputesNeedingAttention()` |
+| `src/App.tsx` | Both `buildDisputeContext` call sites now pass `evidenceByDispute[selectedDisputeId]` |
+| `src/lib/agentApi.ts` | `StreamAgentMessageArgs` gains `enabledSources`/`dispute`/`workspace` |
+| `src/hooks/useChatStore.tsx` | Global-mode `streamAgentMessage` call sends `enabledSources` + the live workspace summary |
+| `tests/server/sharedAgent.test.ts`, `tests/ChatFlow.test.tsx`, `tests/server/runtime.test.ts` | Updated for the new `buildContextPrompt` signature/behavior and request shape; new context-isolation and investigation-progress tests |
+
+### Verification performed
+
+- `npx tsc -b` (project-reference build, not just `--noEmit`) — clean.
+- `npm run lint` — clean.
+- `npx vitest run` — **133/133 passing** (118 at Phase 2's commit; +15 this phase — new context-isolation, investigation-progress, and `buildDisputeContext` coverage, plus several existing tests extended in place for the new `buildContextPrompt` signature).
+- `npm run build` — clean.
+- Live in-browser walkthrough — see above.
+
 ## Known limitations (honest, not hidden)
 
-- **Conversation-only — no tools yet.** The shared agent cannot call any tool in this phase ("do not implement all real tools yet" was the explicit instruction). It cannot look up a customer, a transaction, or a dispute, and it does not know the seller's name or business details. Global chat's answers are genuinely helpful in tone but not grounded in any data — that's Phase 3.
-- **The stub's replies don't vary by session mode or by prior turns.** `StubStreamClient` only pattern-matches the *latest* message; it doesn't read the system prompt or the transcript. Session mode (`buildContextPrompt`) and multi-turn memory (`session.transcript` accumulation) are both real and independently tested (`tests/server/sharedAgent.test.ts`) at the data-structure level — but only a live model, given the different system prompt and the real transcript, would visibly *behave* differently because of them. This environment has no `ANTHROPIC_API_KEY`, so that visible difference has not been observed live; wiring one and re-running the "Hello there" walkthrough above against `AnthropicStreamClient` is the natural next check.
-- **Write/approval capability exists only on dispute-context chats.** Before this phase, the stub's `commas_mark_dispute_response_ready` write tool was reachable from *any* chat, including global, by typing the exact undocumented phrase "mark the response ready". Global chats now route to the shared agent, which has no tools at all, so that specific (never demo-scripted, never chip-driven) capability is no longer reachable from a global chat — only from the dispute chat that actually powers the Resolution Center's write/approval flow, which is fully preserved and re-verified live above.
-- **Session memory is in-process only.** `SessionStore` is a plain `Map`; a server restart loses every shared-agent session (the *rendered* transcript in the browser survives via localStorage, but the model's own memory does not). No bootstrap-from-client-history path exists yet for a session that already had turns before the process restarted mid-conversation losing them silently — architecture §4's `memoryLost` signal is deferred; `bootstrapHistory` only seeds a session that's brand new to the store.
-- **No persistence to `data/state.json`.** Sessions live in memory only, matching the legacy runtime's own persistence story (the `data/state.json` gitignore entry has never been written to by either runtime).
-- **No dataset behind the context yet.** `buildContextPrompt` cannot mention a specific dispute's real facts (customer, amount, evidence) — Phase 3 wires the one shared dataset and widened tool layer from `AI_ASSISTANT_ARCHITECTURE.md` §6 into this exact loop.
-- **`server/types.ts` / `src/lib/types.ts`** were not unified into a `shared/` module this phase (architecture §10's Phase 3 item) — the new streaming request/response shapes are defined locally in `server/app.ts` / `src/lib/agentApi.ts` instead, kept intentionally small.
+- **Still conversation-only for the shared agent — no tools.** Global chat's context is now genuinely rich (workspace summary) and dispute-mode's context *can* carry real facts, but the shared agent still can't call a tool — it only knows what's handed to it in `AgentContext` for that turn. "What did the customer say?" (a task example scenario) has no field in this phase's context model and isn't answerable by either runtime's stub in a grounded way — the legacy runtime's real communications-lookup tool covers this for dispute chats today, when asked as a distinct investigation step; the shared agent doesn't have an equivalent yet. Real tool-calling in the shared agent's own loop is Phase 4.
+- **Dispute chats still don't route through the shared agent's streaming endpoint.** They keep the legacy `/api/agent/run` path (real tools, write-approval) entirely unchanged — a deliberate risk decision (see Phase 3 section above), not an oversight. The shared agent's own dispute-mode support is real and tested (`tests/server/sharedAgent.test.ts`), just not yet the frontend's actual dispute-chat transport.
+- **`pendingActions` is always `[]`.** The context model can *represent* the field (typed `never[]`, documented), but nothing populates it — that's architecture §7's propose/approve pipeline, still unbuilt.
+- **Write/approval capability still exists only on dispute-context chats** (unchanged from Phase 2 — global chats still have no tools at all).
+- **Session memory is still in-process only** (unchanged from Phase 2 — no `data/state.json` persistence for either runtime).
+- **`server/types.ts` / `src/lib/types.ts`** still hand-mirrored, not unified into a `shared/` module (architecture §10) — `DisputeContextDetail`'s two new fields were added to both by hand, same as every other field in that type.
 
 ## Implementation sequence (from architecture §11)
 
-1. ~~Live model on the existing loop (no UI change)~~ — **done this phase**, plus streaming + sessions pulled forward from §11's phases 3–4 to satisfy this task's explicit ask for a session abstraction and streamed responses now.
-2. One dataset + wider Commas/connector tools with citations — **next**
-3. Server-side sessions + context envelope + context block — session store/context builder now exist; the envelope (page/evidence/sources) and delta-context-block refinement are still open
-4. Streaming SSE transport consumed by `useChatStore` — **done this phase**
+1. ~~Live model on the existing loop (no UI change)~~ — **done in Phase 2**, plus streaming + sessions pulled forward from §11's phases 3–4.
+2. One dataset + wider Commas/connector tools with citations — still open; the context model (this phase) is now rich enough to *carry* dataset facts, but nothing calls a tool to *fetch* them dynamically yet
+3. ~~Server-side sessions + context envelope + context block~~ — **done this phase**: `AgentContext` is the envelope, shared by both runtimes, isolation-tested
+4. Streaming SSE transport consumed by `useChatStore` — **done in Phase 2**
 5. Dispute-mode investigation prompt (loop, stopping criteria, report format)
-6. Resolution Center persistence + proposal/approval actions (`ProposalCard`, executors)
+6. Resolution Center persistence + proposal/approval actions (`ProposalCard`, executors) — `pendingActions`'s slot now exists in the context model, unpopulated
 7. Global-mode polish, hardening, docs, regression suite
 
 ## Notes

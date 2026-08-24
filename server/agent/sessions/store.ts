@@ -12,6 +12,8 @@
  * other.
  */
 
+import { buildAgentContext, type AgentContext } from "../context/model.js";
+
 export type SessionConfig = { mode: "global" } | { mode: "dispute"; disputeId: string };
 
 export interface SessionTranscriptEntry {
@@ -25,6 +27,14 @@ export interface SessionRecord {
   transcript: SessionTranscriptEntry[];
   createdAt: string;
   updatedAt: string;
+  /** This session's own scoped context (server/agent/context/model.ts) — never another
+   * session's, by construction: a fresh session always gets a fresh context matching *its own*
+   * `config`, and `resolve` discards+recreates (context included) rather than reusing a
+   * mismatched one. This is the concrete mechanism behind the isolation requirement: switching
+   * disputes means a different sessionId, which means `resolve` either returns a session whose
+   * `context.dispute.disputeId` already matches, or builds a brand-new one — there is no code
+   * path that copies one session's context onto another. */
+  context: AgentContext;
 }
 
 function configsMatch(a: SessionConfig, b: SessionConfig): boolean {
@@ -86,9 +96,25 @@ export class SessionStore {
       transcript: [...bootstrapHistory],
       createdAt: now,
       updatedAt: now,
+      // Bare — no dispute/workspace facts yet. The caller (runSharedAgent) always follows a
+      // `resolve` with `updateContext` using this turn's freshly-computed facts before building
+      // the prompt, so this bare value is never actually what the model sees.
+      context: buildAgentContext({ conversationId: sessionId, conversationType: config.mode }),
     };
     this.sessions.set(sessionId, fresh);
     return fresh;
+  }
+
+  /**
+   * Replaces a session's stored context with a freshly-computed one — called every turn (not
+   * merged) because the caller always derives `context` from the current request's facts plus
+   * this session's own prior turn count, so a full replace can never leave stale fields behind
+   * (e.g. an evidence category the seller has since removed).
+   */
+  updateContext(sessionId: string, context: AgentContext): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.context = context;
   }
 
   get(sessionId: string): SessionRecord | undefined {
