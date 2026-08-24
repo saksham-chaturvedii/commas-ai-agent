@@ -40,8 +40,14 @@ function Harness() {
   );
 }
 
-function mockFetchOnce(body: unknown) {
-  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => body });
+/** Mocks the shared agent's streaming response — every chat in this file is context-less
+ * (global-mode), so `sendMessage` (src/hooks/useChatStore.tsx) always routes through
+ * POST /api/agent/stream now, not the legacy JSON /api/agent/run (docs/AI_ASSISTANT_ARCHITECTURE.md). */
+function mockStreamFetchOnce(answerText: string) {
+  const body = `event: delta\ndata: ${JSON.stringify({ text: answerText })}\n\nevent: done\ndata: ${JSON.stringify({ text: answerText })}\n\n`;
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }));
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -59,7 +65,7 @@ describe("chat credit system", () => {
   });
 
   it("A. normal usage: 300/300 -> send message -> 299/300, charged once per message, not per step/write", async () => {
-    mockFetchOnce({ steps: [], answer: "Answer.", toolSummary: [] });
+    mockStreamFetchOnce("Answer.");
     render(
       <ChatStoreProvider>
         <Harness />
@@ -95,7 +101,7 @@ describe("chat credit system", () => {
   });
 
   it("C. last credit: send -> 0/300 -> composer disabled -> purchase CTA appears", async () => {
-    mockFetchOnce({ steps: [], answer: "Last answer.", toolSummary: [] });
+    mockStreamFetchOnce("Last answer.");
     render(
       <ChatStoreProvider>
         <Harness />
@@ -116,7 +122,7 @@ describe("chat credit system", () => {
   });
 
   it("D. exhausted: attempting to send never reaches the agent (no fetch call), balance never goes negative", async () => {
-    const fetchMock = mockFetchOnce({ steps: [], answer: "Should not be called.", toolSummary: [] });
+    const fetchMock = mockStreamFetchOnce("Should not be called.");
     render(
       <ChatStoreProvider>
         <Harness />
@@ -140,7 +146,7 @@ describe("chat credit system", () => {
   });
 
   it("E. purchase from zero: 0/300 -> buy +50 -> 50/350 -> composer re-enabled", async () => {
-    mockFetchOnce({ steps: [], answer: "Spends last credit.", toolSummary: [] });
+    mockStreamFetchOnce("Spends last credit.");
     render(
       <ChatStoreProvider>
         <Harness />

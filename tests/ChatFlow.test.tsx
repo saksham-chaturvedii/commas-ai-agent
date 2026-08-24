@@ -25,6 +25,36 @@ function mockFetchOnce(body: unknown) {
   return fetchMock;
 }
 
+/** SSE frame helper matching server/app.ts's POST /api/agent/stream wire format exactly. */
+function sseFrame(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+/** Mocks a successful shared-agent stream response — global/dashboard chats only
+ * (src/hooks/useChatStore.tsx). Splits the answer into a few chunks so the test genuinely
+ * exercises incremental delta handling, not just a single-frame response. */
+function mockStreamFetchOnce(answerText: string) {
+  const words = answerText.split(" ");
+  let body = words.map((w, i) => sseFrame("delta", { text: i === 0 ? w : ` ${w}` })).join("");
+  body += sseFrame("done", { text: answerText });
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }));
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+/** Mocks the shared-agent stream reporting a server-side error via an `event: error` frame —
+ * the streaming equivalent of the legacy JSON path's `{error: {code, message}}` shape. */
+function mockStreamErrorOnce(message: string) {
+  const body = sseFrame("error", { message });
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }));
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
 describe("chat flow (wired to the real agent backend over POST /api/agent/run)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -47,18 +77,11 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
     expect(screen.getByText("Summarize my sales")).toBeInTheDocument();
   });
 
-  it("clicking a suggestion calls the agent backend (with empty history on a fresh chat) and renders its real response", async () => {
-    const fetchMock = mockFetchOnce({
-      steps: [
-        { id: "commas-1", sourceId: "commas", classification: "read", label: "Checking transaction history…" },
-        { id: "commas-2", sourceId: "commas", classification: "read", label: "Checking customer records…" },
-      ],
-      answer: "Found 1 transaction totaling $499.00.",
-      toolSummary: [
-        { sourceId: "commas", label: "Transaction history", ok: true },
-        { sourceId: "commas", label: "Customer records", ok: true },
-      ],
-    });
+  it("clicking a suggestion in a global (context-less) chat calls the shared agent's streaming endpoint and renders the real incremental response", async () => {
+    // Global-mode chats route through POST /api/agent/stream (the shared agent runtime,
+    // docs/AI_ASSISTANT_ARCHITECTURE.md) — dispute-context chats keep the /api/agent/run path
+    // exercised by the other tests in this file below.
+    const fetchMock = mockStreamFetchOnce("Found 1 transaction totaling $499.00.");
 
     render(
       <ChatStoreProvider>
@@ -71,29 +94,29 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
     // user message appears immediately, before the network call resolves
     expect(screen.getByText("Summarize my sales this month")).toBeInTheDocument();
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/agent/run",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          prompt: "Summarize my sales this month",
-          enabledSources: ["commas", "google-calendar", "zoom", "fathom"],
-          context: undefined,
-          history: [],
-        }),
-      }),
-    );
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/agent/stream");
+    expect(init.method).toBe("POST");
+    const requestBody = JSON.parse(init.body);
+    expect(requestBody).toEqual({
+      sessionId: expect.any(String),
+      mode: "global",
+      message: "Summarize my sales this month",
+      history: [],
     });
 
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500); // let the stream's microtasks + the 250ms tail-reset settle
+    });
+
+    // No client-side reveal timers gate this path — the text is real incremental network
+    // output, already fully rendered as soon as the (mocked) stream finishes.
     expect(screen.getByText("Found 1 transaction totaling $499.00.")).toBeInTheDocument();
-    expect(screen.getByText(/Checked 2 sources/)).toBeInTheDocument();
   });
 
-  it("sends prior messages as history on a second turn (multi-turn memory)", async () => {
-    mockFetchOnce({ steps: [], answer: "First answer.", toolSummary: [] });
+  it("sends prior messages as history on a second turn (multi-turn memory) — client-resent history, distinct from the shared agent's own server-side session memory tested in tests/server/sharedAgent.test.ts", async () => {
+    mockStreamFetchOnce("First answer.");
 
     render(
       <ChatStoreProvider>
@@ -103,16 +126,16 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
 
     fireEvent.click(screen.getByText("Summarize my sales"));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(500);
     });
     expect(screen.getByText("First answer.")).toBeInTheDocument();
 
-    const secondFetchMock = mockFetchOnce({ steps: [], answer: "Second answer.", toolSummary: [] });
+    const secondFetchMock = mockStreamFetchOnce("Second answer.");
     fireEvent.change(screen.getByPlaceholderText("Ask about your business…"), { target: { value: "And what else?" } });
     fireEvent.keyDown(screen.getByPlaceholderText("Ask about your business…"), { key: "Enter" });
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(500);
     });
 
     const secondCallBody = JSON.parse(secondFetchMock.mock.calls[0][1].body);
@@ -120,15 +143,12 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
       { role: "user", text: "Summarize my sales this month" },
       { role: "assistant", text: "First answer." },
     ]);
+    expect(secondCallBody.mode).toBe("global");
+    expect(screen.getByText("Second answer.")).toBeInTheDocument();
   });
 
-  it("renders a clean error state when the agent backend reports a failure", async () => {
-    mockFetchOnce({
-      steps: [],
-      answer: "",
-      toolSummary: [],
-      error: { code: "server_unavailable", message: "The Commas connection is unavailable right now." },
-    });
+  it("renders a clean error state when the shared agent reports a failure (event: error frame)", async () => {
+    mockStreamErrorOnce("The Commas connection is unavailable right now.");
 
     render(
       <ChatStoreProvider>
@@ -139,7 +159,7 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
     fireEvent.click(screen.getByText("Analyze my disputes"));
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(500);
     });
 
     expect(
@@ -168,7 +188,24 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
     expect(screen.queryByText(/npm run/)).not.toBeInTheDocument();
   });
 
-  it("renders an approval card for a write action, and only sends it after Approve", async () => {
+  it("renders an approval card for a write action, and only sends it after Approve (dispute-context chats keep the full legacy tool/approval path)", async () => {
+    // Write actions and approval only exist on the legacy /api/agent/run path, which now serves
+    // dispute-context chats exclusively (global chats route to the shared agent's streaming
+    // endpoint instead — see the tests above — and don't call tools yet by design). A
+    // dispute-context Harness is what actually exercises this in the running app: Resolution
+    // Center → Investigate with AI.
+    function DisputeHarness() {
+      const { createChat, chats } = useChatStore();
+      const [chatId, setChatId] = useState<string | null>(null);
+      useEffect(() => {
+        setChatId(createChat({ kind: "dispute", id: "2481", label: "Dispute #2481 — Sarah Johnson" }));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []);
+      const chat = chats.find((c: Chat) => c.id === chatId);
+      if (!chat) return null;
+      return <ChatWorkspace chat={chat} />;
+    }
+
     mockFetchOnce({
       steps: [],
       answer: "",
@@ -183,7 +220,7 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
 
     render(
       <ChatStoreProvider>
-        <Harness />
+        <DisputeHarness />
       </ChatStoreProvider>,
     );
 
@@ -256,6 +293,77 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
     expect(screen.getByTestId("chat-b-messages").textContent).toBe("0");
   });
 
+  it("deleting a chat mid-stream doesn't let its orphaned completion free up runChatId while a newer run is still active", async () => {
+    // Regression: deleteChat frees runChatId synchronously (unlike cancelRun's 300ms hold), so a
+    // brand-new run can start on a different chat before the deleted chat's own in-flight
+    // request settles. When that orphaned request later resolves, it must not touch the shared
+    // run-tracking state at all — otherwise it can free runChatId while the *new* run is still
+    // genuinely in progress, which would let a third run start on top of it (defeating the
+    // one-run-at-a-time guard, P1-6).
+    let releaseA: (() => void) | null = null;
+    const aPending = new Promise<Response>((resolve) => {
+      releaseA = () =>
+        resolve(new Response(sseFrame("done", { text: "Stale A reply." }), { status: 200, headers: { "content-type": "text/event-stream" } }));
+    });
+    const bPending = new Promise<Response>(() => {}); // never resolves — chat B stays "running" for this whole test
+    let callCount = 0;
+    const fetchMock = vi.fn().mockImplementation(() => {
+      callCount += 1;
+      return callCount === 1 ? aPending : bPending;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    function ThreeChatHarness() {
+      const { createChat, deleteChat, sendMessage } = useChatStore();
+      const [ids, setIds] = useState<string[]>([]);
+      useEffect(() => {
+        setIds([createChat(), createChat(), createChat()]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []);
+      if (ids.length < 3) return null;
+      return (
+        <div>
+          <button type="button" onClick={() => sendMessage(ids[0], "first")}>
+            send-a
+          </button>
+          <button type="button" onClick={() => deleteChat(ids[0])}>
+            delete-a
+          </button>
+          <button type="button" onClick={() => sendMessage(ids[1], "second")}>
+            send-b
+          </button>
+          <button type="button" onClick={() => sendMessage(ids[2], "third")}>
+            send-c
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <ChatStoreProvider>
+        <ThreeChatHarness />
+      </ChatStoreProvider>,
+    );
+    await act(async () => {});
+
+    fireEvent.click(screen.getByText("send-a"));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText("delete-a"));
+    fireEvent.click(screen.getByText("send-b")); // allowed: deleteChat freed runChatId
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      releaseA?.();
+      // Long enough for A's orphaned promise to settle and, if the bug is present, for its
+      // trailing 250ms setTimeout to fire and clear runChatId.
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    fireEvent.click(screen.getByText("send-c")); // must be refused — B's run is still genuinely active
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("reconciles a chat persisted mid-run back to idle with an interruption notice (P1-8)", () => {
     const interrupted: Chat = {
       id: "chat-interrupted",
@@ -291,7 +399,7 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
   });
 
   it("persists chats to localStorage and restores them on a fresh provider mount (reload simulation)", async () => {
-    mockFetchOnce({ steps: [], answer: "Persisted answer.", toolSummary: [] });
+    mockStreamFetchOnce("Persisted answer.");
 
     const { unmount } = render(
       <ChatStoreProvider>
@@ -300,7 +408,7 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
     );
     fireEvent.click(screen.getByText("Summarize my sales"));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(500);
     });
     expect(screen.getByText("Persisted answer.")).toBeInTheDocument();
     unmount();

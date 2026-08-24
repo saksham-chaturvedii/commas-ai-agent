@@ -11,14 +11,33 @@ import type {
   SourceInfo,
 } from "../lib/types";
 import { DEFAULT_ENABLED_SOURCES, INITIAL_CREDITS, SEED_CHATS, SOURCES } from "../lib/mockData";
-import { runAgentTurn, approveAgentAction, type AgentRunPlan, type ConversationTurn } from "../lib/agentApi";
+import {
+  runAgentTurn,
+  approveAgentAction,
+  streamAgentMessage,
+  AgentStreamError,
+  type AgentRunPlan,
+  type ConversationTurn,
+} from "../lib/agentApi";
 
 /**
- * Shared chat state. `sendMessage` calls the real agent backend (server/) over
- * POST /api/agent/run — see docs/active-context.md for what's real vs. still mocked. Chat/
- * sources/credits are persisted to localStorage (see loadPersisted/persist below) so a
- * conversation survives a reload; there is still no backend-side store (ARCHITECTURE.md §10's
- * JSON-snapshot design remains a documented future option, not built).
+ * Shared chat state. `sendMessage` routes to one of two backends depending on the chat's
+ * context, per the shared-agent architecture (docs/AI_ASSISTANT_ARCHITECTURE.md):
+ *
+ * - **Dispute-context chats** (Resolution Center) → the legacy `POST /api/agent/run` /
+ *   `runAgentTurn` path, byte-for-byte unchanged from before this phase — real tool calls, the
+ *   write-approval pause, and the client-side step-reveal timers in `applyPlan` below.
+ * - **Everything else** (context-less "global" chats and dashboard-context chats) → the new
+ *   shared agent runtime's streaming endpoint, `POST /api/agent/stream` / `streamAgentMessage`,
+ *   which appends real incremental text to the assistant message as it arrives (see the
+ *   `ensureStreamingMessage`/`appendStreamDelta`/`finalizeStreamedMessage` helpers below) instead
+ *   of replaying a pre-computed plan on timers.
+ *
+ * Chat/sources/credits are persisted to localStorage (see loadPersisted/persist below) so a
+ * conversation survives a reload; there is still no backend-side store for the legacy path
+ * (ARCHITECTURE.md §10's JSON-snapshot design remains a documented future option) — the shared
+ * agent runtime's own session memory (server/agent/sessions/) lives in the backend process only,
+ * for now.
  */
 
 const STEP_INTERVAL_MS = 650;
@@ -229,6 +248,12 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     (id: string) => {
       setChats((prev) => prev.filter((c) => c.id !== id));
       if (runChatId === id) {
+        // Mirrors cancelRun: without marking this cancelled and aborting the in-flight request,
+        // the orphaned promise's completion later fires unconditionally and clobbers whatever
+        // *new* run may have started in the meantime (sendMessage's own cancelledRef checks are
+        // what prevent that — they only work if this actually sets the flag first).
+        cancelledRef.current = true;
+        abortRef.current?.abort();
         clearTimers();
         setRunChatId(null);
         setRunPhase("idle");
@@ -336,6 +361,61 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     [setChatStatus],
   );
 
+  /** Appends a new, empty, `streaming: true` assistant message — the placeholder that
+   * `appendStreamDelta` grows in place as real text arrives. Used only by the shared-agent
+   * streaming path (global/dashboard chats); the legacy dispute-chat path never calls this. */
+  const ensureStreamingMessage = useCallback((chatId: string, messageId: string) => {
+    setChats((prev) =>
+      prev.map((c) =>
+        c.id === chatId
+          ? {
+              ...c,
+              messages: [...c.messages, { id: messageId, role: "assistant", text: "", ts: new Date().toISOString(), streaming: true }],
+            }
+          : c,
+      ),
+    );
+  }, []);
+
+  const appendStreamDelta = useCallback((chatId: string, messageId: string, delta: string) => {
+    setChats((prev) =>
+      prev.map((c) =>
+        c.id === chatId
+          ? { ...c, messages: c.messages.map((m) => (m.id === messageId ? { ...m, text: m.text + delta } : m)) }
+          : c,
+      ),
+    );
+  }, []);
+
+  /** Marks the streamed message settled (`streaming: false`) and sets the chat's final status.
+   * `errorText`, when given, only replaces the message's text if nothing streamed in before the
+   * failure — a reply that streamed most of the way and then failed keeps what genuinely arrived,
+   * rather than discarding real output for a generic error line. If the message ends up with no
+   * text at all and no error (e.g. cancelled before the first delta arrived), the placeholder is
+   * removed instead of leaving a content-less empty bubble behind. */
+  const finalizeStreamedMessage = useCallback((chatId: string, messageId: string, errorText?: string) => {
+    setChats((prev) =>
+      prev.map((c) => {
+        if (c.id !== chatId) return c;
+        const target = c.messages.find((m) => m.id === messageId);
+        if (target && target.text.length === 0 && !errorText) {
+          return {
+            ...c,
+            messages: c.messages.filter((m) => m.id !== messageId),
+            status: "idle" as const,
+            updatedAt: new Date().toISOString(),
+          };
+        }
+        const messages = c.messages.map((m) =>
+          m.id === messageId
+            ? { ...m, text: errorText && m.text.length === 0 ? `I ran into a problem: ${errorText}` : m.text, streaming: false }
+            : m,
+        );
+        return { ...c, messages, status: errorText ? ("error" as const) : ("idle" as const), updatedAt: new Date().toISOString() };
+      }),
+    );
+  }, []);
+
   const sendMessage = useCallback(
     (chatId: string, text: string) => {
       const trimmed = text.trim();
@@ -379,39 +459,98 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       clearTimers();
       const controller = new AbortController();
       abortRef.current = controller;
+      // `cancelledRef` alone isn't enough to protect the trailing state commits below: it's a
+      // single store-wide flag that a *later* run resets to false the moment it starts (see the
+      // line above, next time sendMessage runs). If this run's chat is deleted mid-flight,
+      // deleteChat frees runChatId immediately (unlike cancelRun's 300ms hold), so a new run can
+      // start — and reset cancelledRef — before this orphaned promise settles. Comparing against
+      // `controller` instead catches that: a newer run always installs its own AbortController,
+      // so this closure's `controller` stops being the current one the instant that happens,
+      // regardless of what cancelledRef reads by then.
+      const supersededByLaterRun = () => abortRef.current !== controller;
       setPendingApproval(null);
       setRunChatId(chatId);
       setRunPhase("running");
       setRunSteps([]);
       setVisibleStepIds([]);
 
-      // Real network call to the agent backend — the ProgressBlock's "Thinking…" fallback
-      // (runSteps still empty) covers the in-flight window; once the response arrives, the
-      // per-step reveal timers below pace its *display* only — the steps already ran
-      // server-side.
+      if (chat.context?.kind === "dispute") {
+        // Dispute-context chats (Resolution Center) keep the exact legacy path — real tool
+        // calls, the write-approval pause, and the client-side step-reveal timers in applyPlan.
+        // Real network call to the agent backend — the ProgressBlock's "Thinking…" fallback
+        // (runSteps still empty) covers the in-flight window; once the response arrives, the
+        // per-step reveal timers below pace its *display* only — the steps already ran
+        // server-side.
+        void (async () => {
+          let plan: AgentRunPlan;
+          try {
+            plan = await runAgentTurn(
+              { prompt: trimmed, enabledSources: chat.enabledSources, context: chat.context, history },
+              controller.signal,
+            );
+          } catch {
+            if (cancelledRef.current || supersededByLaterRun()) return;
+            plan = {
+              steps: [],
+              answer: "",
+              toolSummary: [],
+              error: {
+                code: "server_unavailable",
+                message: "The AI agent is temporarily unreachable. Check your connection and try again.",
+              },
+            };
+          }
+          if (cancelledRef.current || supersededByLaterRun()) return;
+          applyPlan(chatId, plan);
+        })();
+        return;
+      }
+
+      // Global / dashboard-context chats: the shared agent runtime's streaming endpoint
+      // (docs/AI_ASSISTANT_ARCHITECTURE.md). A placeholder assistant message is appended
+      // immediately and grown in place as real deltas arrive — ChatMessageList.tsx hides the
+      // generic "Thinking…" ProgressBlock the moment this message has content, so the seller
+      // sees the real answer streaming in rather than a stale spinner sitting above it.
+      const messageId = newId("m");
+      ensureStreamingMessage(chatId, messageId);
       void (async () => {
-        let plan: AgentRunPlan;
         try {
-          plan = await runAgentTurn(
-            { prompt: trimmed, enabledSources: chat.enabledSources, context: chat.context, history },
+          await streamAgentMessage(
+            { sessionId: chatId, mode: "global", message: trimmed, history },
+            (delta) => appendStreamDelta(chatId, messageId, delta),
             controller.signal,
           );
-        } catch {
-          if (cancelledRef.current) return;
-          plan = {
-            steps: [],
-            answer: "",
-            toolSummary: [],
-            error: {
-              code: "server_unavailable",
-              message: "The AI agent is temporarily unreachable. Check your connection and try again.",
-            },
-          };
+          if (cancelledRef.current || supersededByLaterRun()) {
+            finalizeStreamedMessage(chatId, messageId);
+            return;
+          }
+          finalizeStreamedMessage(chatId, messageId);
+        } catch (err) {
+          if (cancelledRef.current || supersededByLaterRun()) {
+            finalizeStreamedMessage(chatId, messageId);
+            return;
+          }
+          // Only a server-authored error (the agent itself reported a problem) is safe to show
+          // verbatim — anything else (network failure, bad status, unreadable stream) gets the
+          // same fixed, product-voiced copy the legacy path already uses, never a raw fetch/
+          // browser error string (PRODUCT_READINESS_AUDIT.md P1-4).
+          const message =
+            err instanceof AgentStreamError
+              ? err.message
+              : "The AI agent is temporarily unreachable. Check your connection and try again.";
+          finalizeStreamedMessage(chatId, messageId, message);
         }
-        applyPlan(chatId, plan);
+        if (supersededByLaterRun()) return; // a newer run owns runChatId/runPhase now — don't touch it
+        setRunPhase("done");
+        window.setTimeout(() => {
+          setRunChatId(null);
+          setRunPhase("idle");
+          setRunSteps([]);
+          setVisibleStepIds([]);
+        }, 250);
       })();
     },
-    [chats, credits, runChatId, clearTimers, applyPlan],
+    [chats, credits, runChatId, clearTimers, applyPlan, ensureStreamingMessage, appendStreamDelta, finalizeStreamedMessage],
   );
 
   const resolveApproval = useCallback(

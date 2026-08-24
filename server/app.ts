@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 import { CommasAdapter } from "./adapters/commasAdapter.js";
 import { createFathomAdapter, createZoomAdapter } from "./adapters/meetingsAdapters.js";
 import { GmailAdapter } from "./adapters/gmailAdapter.js";
@@ -12,10 +13,28 @@ import { StubLlmClient } from "./llm/stubClient.js";
 import { AnthropicLlmClient } from "./llm/anthropicClient.js";
 import type { LlmClient } from "./llm/types.js";
 import type { AgentApproveRequest, AgentRunRequest, AgentRunResponse, ConversationTurn } from "./types.js";
+// --- shared agent runtime (docs/AI_ASSISTANT_ARCHITECTURE.md) — additive, alongside the legacy
+// runtime/LLM client imports above, which remain exactly as they were.
+import { SessionStore, type SessionConfig } from "./agent/sessions/store.js";
+import { runSharedAgent } from "./agent/runtime/sharedAgent.js";
+import { AnthropicStreamClient } from "./llm/streaming/anthropicStreamClient.js";
+import { StubStreamClient } from "./llm/streaming/stubStreamClient.js";
+import type { StreamingLlmClient } from "./llm/streaming/types.js";
 
 /** A capped conversation window sent to the LLM per turn — enough for real continuity
  * without unbounded payload growth on a long-running chat. */
 const HISTORY_TURN_LIMIT = 20;
+
+/** Request body for POST /api/agent/stream — the shared agent's own contract, distinct from
+ * `AgentRunRequest` (which stays exactly as the legacy /api/agent/run expects it). */
+interface SharedAgentStreamRequest {
+  sessionId: string;
+  mode?: "global" | "dispute";
+  disputeId?: string;
+  message: string;
+  /** Only used to bootstrap a brand-new server-side session — see `SessionStore.resolve`. */
+  history?: ConversationTurn[];
+}
 
 /**
  * Builds the Hono app (endpoints, source adapters, LLM client selection) without binding a
@@ -64,6 +83,14 @@ export async function createApp() {
         "still run for real against connected sources; only the reasoning step is scripted.",
     );
   }
+
+  // Shared agent runtime (docs/AI_ASSISTANT_ARCHITECTURE.md §4) — its own streaming LLM client
+  // and its own session store, both created fresh per createApp() call exactly like the legacy
+  // llmClient/registry above, so tests (and separate server processes) never share state.
+  const streamingLlmClient: StreamingLlmClient = anthropicApiKey
+    ? new AnthropicStreamClient(anthropicApiKey)
+    : new StubStreamClient();
+  const sessionStore = new SessionStore();
 
   const app = new Hono();
 
@@ -129,6 +156,76 @@ export async function createApp() {
       registry,
     });
     return c.json(result);
+  });
+
+  // --- Shared agent runtime (docs/AI_ASSISTANT_ARCHITECTURE.md) ---
+  //
+  // POST /api/agent/stream: the shared agent's own endpoint. Additive — /api/agent/run and
+  // /api/agent/approve above are completely untouched and keep backing dispute-context chats
+  // (and therefore the Resolution Center) exactly as before this phase. This route currently
+  // only serves global-mode chats from the frontend (src/hooks/useChatStore.tsx), but genuinely
+  // supports both session configs — see tests/server/sharedAgent.test.ts for a direct dispute-
+  // mode exercise of this same route.
+  //
+  // Response is a real SSE stream (`hono/streaming`'s streamSSE — no new dependency), not JSON:
+  // repeated `event: delta` frames as the model's reply arrives, followed by one `event: done`
+  // (or `event: error`) frame. See src/lib/agentApi.ts's `streamAgentMessage` for the client-side
+  // parser.
+  app.post("/api/agent/stream", async (c) => {
+    let body: SharedAgentStreamRequest;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "malformed_result" }, 400);
+    }
+
+    if (!body || typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+      return c.json({ error: "malformed_result", message: "sessionId is required." }, 400);
+    }
+    if (typeof body.message !== "string" || body.message.trim().length === 0) {
+      return c.json({ error: "malformed_result", message: "A non-empty message is required." }, 400);
+    }
+
+    if (
+      body.history !== undefined &&
+      (!Array.isArray(body.history) ||
+        body.history.some(
+          (t) =>
+            typeof t !== "object" ||
+            t === null ||
+            (t.role !== "user" && t.role !== "assistant") ||
+            typeof t.text !== "string",
+        ))
+    ) {
+      return c.json({ error: "malformed_result", message: "history entries must be {role, text} turns." }, 400);
+    }
+
+    const config: SessionConfig =
+      body.mode === "dispute" && typeof body.disputeId === "string" && body.disputeId.length > 0
+        ? { mode: "dispute", disputeId: body.disputeId }
+        : { mode: "global" };
+    const bootstrapHistory = capHistory(body.history).map((t) => ({ role: t.role, text: t.text }));
+
+    return streamSSE(c, async (stream) => {
+      await runSharedAgent({
+        sessionId: body.sessionId,
+        config,
+        userMessage: body.message,
+        bootstrapHistory,
+        llmClient: streamingLlmClient,
+        sessionStore,
+        signal: c.req.raw.signal,
+        onEvent: async (event) => {
+          if (event.type === "delta") {
+            await stream.writeSSE({ event: "delta", data: JSON.stringify({ text: event.text }) });
+          } else if (event.type === "done") {
+            await stream.writeSSE({ event: "done", data: JSON.stringify({ text: event.text }) });
+          } else {
+            await stream.writeSSE({ event: "error", data: JSON.stringify({ message: event.message }) });
+          }
+        },
+      });
+    });
   });
 
   return app;

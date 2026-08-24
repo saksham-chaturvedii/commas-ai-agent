@@ -52,6 +52,12 @@ export interface ChatMessage {
   ts: string;
   /** Present on assistant messages that ran tools; collapses into "Checked N sources". */
   toolSummary?: ToolSummaryItem[];
+  /** True while this assistant message's text is still arriving from the shared agent runtime's
+   * streamed response (docs/AI_ASSISTANT_ARCHITECTURE.md §2) — global-mode chats only; dispute
+   * chats never set this (see src/hooks/useChatStore.tsx `sendMessage`). Purely a rendering hint
+   * (used to suppress the redundant "Thinking…" indicator once real text has started arriving —
+   * see ChatMessageList.tsx); absent/false renders identically to a normal message. */
+  streaming?: boolean;
 }
 
 /** Structured dispute facts, attached to dispute-context chats so the agent has them without
