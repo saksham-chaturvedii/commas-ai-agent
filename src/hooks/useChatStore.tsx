@@ -11,7 +11,7 @@ import type {
   SourceInfo,
 } from "../lib/types";
 import { DEFAULT_ENABLED_SOURCES, INITIAL_CREDITS, SEED_CHATS, SOURCES } from "../lib/mockData";
-import { disputesNeedingAttention } from "../lib/disputeData";
+import { DISPUTES, disputesNeedingAttention, type AIEvidenceItem, type EvidenceSourceType } from "../lib/disputeData";
 import {
   runAgentTurn,
   approveAgentAction,
@@ -129,6 +129,20 @@ interface PendingApprovalState extends PendingApproval {
   prompt: string;
 }
 
+/** Session-lifetime, per-dispute evidence — seeded from each dispute's `seedEvidenceItems`
+ * (e.g. Priya Nair's resolved case ships with its historical evidence already on file) so
+ * resolved disputes read as real historical records. Lives here (not in App.tsx, where it
+ * originally did) so BOTH the Resolution Center (DisputeDetail, still the only UI that renders
+ * it) and the chat's proposed-action approval flow (resolveProposedAction below) can read/write
+ * the exact same state — one source of truth, never duplicated into the chat. */
+function seedEvidenceByDispute(): Record<string, AIEvidenceItem[]> {
+  const initial: Record<string, AIEvidenceItem[]> = {};
+  for (const d of DISPUTES) {
+    if (d.seedEvidenceItems.length > 0) initial[d.id] = d.seedEvidenceItems;
+  }
+  return initial;
+}
+
 interface ChatStoreValue {
   chats: Chat[];
   sources: SourceInfo[];
@@ -152,6 +166,26 @@ interface ChatStoreValue {
    * approve flow with no visible effect (PRODUCT_READINESS_AUDIT.md P1-10). Session-only,
    * mirroring the backend's own in-memory flag. */
   markedReadyDisputeIds: string[];
+  /** Evidence per dispute — the Resolution Center's own "Add evidence" flow and the chat's
+   * `propose_add_evidence` approval flow both go through this one function/state; nothing
+   * about a dispute's visible evidence lives anywhere else. */
+  evidenceByDispute: Record<string, AIEvidenceItem[]>;
+  addEvidenceItem: (disputeId: string, item: AIEvidenceItem) => void;
+  /** The seller's editable response draft per dispute — previously local, ephemeral state
+   * inside DisputeDetail; lifted here so the chat's `propose_draft_response` approval flow can
+   * set it too, and so it survives navigating away from and back to the dispute detail page. */
+  responseDraftByDispute: Record<string, string>;
+  setResponseDraft: (disputeId: string, text: string) => void;
+  /** Approves or declines one proposed action attached to a specific chat message
+   * (docs/AI_ASSISTANT_ARCHITECTURE.md §7). Approving is the ONLY code path that turns a
+   * proposal into a real case-state change — see server/agent/actions/index.ts's doc comment. */
+  resolveProposedAction: (
+    chatId: string,
+    messageId: string,
+    actionId: string,
+    decision: "approve" | "decline",
+    selectedIndices?: number[],
+  ) => void;
   /** Mock purchase — increases totalCredits only, never touches usedCredits (see
    * CreditsState's doc comment for why that's what makes the "271/300 → +50 → 321/350"
    * edge case work correctly). */
@@ -160,10 +194,8 @@ interface ChatStoreValue {
    * Not surfaced as a normal user-facing action — see AddCreditsModal's "Demo tools" footer. */
   setRemainingCreditsForDemo: (remaining: number) => void;
   /** Dev/demo-only: wipes every write action taken during this session — chats, credits
-   * spent, sources connected/disconnected, mark-ready flags — back to the seed defaults.
-   * Does NOT reload the page: evidence added via "Add evidence" lives in App.tsx's own
-   * state, not here, so the caller (AddCreditsModal) reloads after calling this so that
-   * state resets too — see its "Demo tools" footer. */
+   * spent, sources connected/disconnected, mark-ready flags, evidence added, response
+   * drafts — back to the seed defaults. See AddCreditsModal's "Demo tools" footer. */
   resetDemo: () => void;
 }
 
@@ -193,6 +225,8 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   const [visibleStepIds, setVisibleStepIds] = useState<string[]>([]);
   const [pendingApproval, setPendingApproval] = useState<PendingApprovalState | null>(null);
   const [markedReadyDisputeIds, setMarkedReadyDisputeIds] = useState<string[]>([]);
+  const [evidenceByDispute, setEvidenceByDispute] = useState<Record<string, AIEvidenceItem[]>>(seedEvidenceByDispute);
+  const [responseDraftByDispute, setResponseDraftByDispute] = useState<Record<string, string>>({});
 
   const cancelledRef = useRef(false);
   const timersRef = useRef<number[]>([]);
@@ -340,6 +374,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
           text: answerText,
           ts: new Date().toISOString(),
           toolSummary: plan.toolSummary.length > 0 ? plan.toolSummary : undefined,
+          proposedActions: plan.proposedActions && plan.proposedActions.length > 0 ? plan.proposedActions : undefined,
         };
         setChats((prev) =>
           prev.map((c) =>
@@ -614,6 +649,89 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   const approveWrite = useCallback(() => resolveApproval("approve"), [resolveApproval]);
   const declineWrite = useCallback(() => resolveApproval("decline"), [resolveApproval]);
 
+  const addEvidenceItem = useCallback((disputeId: string, item: AIEvidenceItem) => {
+    setEvidenceByDispute((prev) => ({ ...prev, [disputeId]: [...(prev[disputeId] ?? []), item] }));
+  }, []);
+
+  const setResponseDraft = useCallback((disputeId: string, text: string) => {
+    setResponseDraftByDispute((prev) => ({ ...prev, [disputeId]: text }));
+  }, []);
+
+  /** The one place a proposal (server/agent/actions/index.ts) turns into a real case-state
+   * change — never anywhere else, so "do not allow high-consequence actions to execute
+   * silently" holds by construction: nothing calls addEvidenceItem/setResponseDraft on the
+   * agent's behalf except this function, and this function only runs from an explicit click on
+   * a rendered ProposedActionCard. Declining (or re-clicking an already-resolved action) only
+   * updates the card's own status — never touches case state. */
+  const resolveProposedAction = useCallback(
+    (
+      chatId: string,
+      messageId: string,
+      actionId: string,
+      decision: "approve" | "decline",
+      /** For `add_evidence` only — indices into `action.items` the seller kept checked (the
+       * card defaults every item to checked, so this is normally all of them, but the seller
+       * can uncheck any before approving — "the user reviews" isn't just a formality). Ignored
+       * for `draft_response`, and ignored entirely on decline. */
+      selectedIndices?: number[],
+    ) => {
+      const chat = chats.find((c) => c.id === chatId);
+      const message = chat?.messages.find((m) => m.id === messageId);
+      const action = message?.proposedActions?.find((a) => a.id === actionId);
+      if (!action || action.status !== "pending") return;
+
+      let addedCount: number | undefined;
+      if (decision === "approve") {
+        if (action.type === "add_evidence") {
+          const items = selectedIndices ? action.items.filter((_, i) => selectedIndices.includes(i)) : action.items;
+          addedCount = items.length;
+          for (const candidate of items) {
+            addEvidenceItem(action.disputeId, {
+              id: newId("ai-evidence"),
+              title: candidate.title,
+              record: candidate.record,
+              why: candidate.why,
+              sourceType: candidate.sourceType as EvidenceSourceType,
+              sourceLabel: candidate.sourceLabel,
+              addedBy: "ai",
+              category: candidate.category,
+              files: [],
+            });
+          }
+        } else if (action.type === "draft_response") {
+          setResponseDraft(action.disputeId, action.draftText);
+        }
+      }
+
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chatId
+            ? {
+                ...c,
+                messages: c.messages.map((m) =>
+                  m.id === messageId
+                    ? {
+                        ...m,
+                        proposedActions: m.proposedActions?.map((a) =>
+                          a.id === actionId
+                            ? {
+                                ...a,
+                                status: decision === "approve" ? "approved" : "declined",
+                                ...(a.type === "add_evidence" && addedCount !== undefined ? { approvedCount: addedCount } : {}),
+                              }
+                            : a,
+                        ),
+                      }
+                    : m,
+                ),
+              }
+            : c,
+        ),
+      );
+    },
+    [chats, addEvidenceItem, setResponseDraft],
+  );
+
   const toggleChatSource = useCallback((chatId: string, sourceId: SourceId) => {
     setChats((prev) =>
       prev.map((c) =>
@@ -660,6 +778,8 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     setVisibleStepIds([]);
     setPendingApproval(null);
     setMarkedReadyDisputeIds([]);
+    setEvidenceByDispute(seedEvidenceByDispute());
+    setResponseDraftByDispute({});
     persist({ chats: SEED_CHATS, sources: SOURCES, credits: INITIAL_CREDITS });
   }, [clearTimers]);
 
@@ -683,6 +803,11 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       connectSource,
       disconnectSource,
       markedReadyDisputeIds,
+      evidenceByDispute,
+      addEvidenceItem,
+      responseDraftByDispute,
+      setResponseDraft,
+      resolveProposedAction,
       addCredits,
       setRemainingCreditsForDemo,
       resetDemo,
@@ -706,6 +831,11 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       connectSource,
       disconnectSource,
       markedReadyDisputeIds,
+      evidenceByDispute,
+      addEvidenceItem,
+      responseDraftByDispute,
+      setResponseDraft,
+      resolveProposedAction,
       addCredits,
       setRemainingCreditsForDemo,
       resetDemo,

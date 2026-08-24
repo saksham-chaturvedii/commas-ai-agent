@@ -30,9 +30,9 @@ export function AddCreditsModal({
     onClose();
   };
 
-  // Wipes chats/credits/sources back to seed, then reloads so evidence added via "Add
-  // evidence" (App.tsx-local state, not covered by resetDemo) resets too — lets the seller
-  // restart a demo mid-walkthrough without losing the whole browser tab.
+  // Wipes chats/credits/sources/evidence/drafts back to seed (useChatStore's resetDemo), then
+  // reloads to also clear any transient local component state (open modals, in-flight UI
+  // state) — lets the seller restart a demo mid-walkthrough cleanly.
   const handleReset = () => {
     resetDemo();
     window.location.reload();

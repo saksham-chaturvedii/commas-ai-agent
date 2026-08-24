@@ -29,9 +29,9 @@ Build a real AI assistant inside the existing Commas AI Agent prototype that can
 
 ## Current phase
 
-**4 — First real tool layer (implemented, live-verified)**
+**5 — Agent-initiated application actions (implemented, live-verified)**
 
-The shared agent's loop is now a real tool-calling loop, not conversation-only: `StreamingLlmClient.streamStep()` (renamed from `streamReply`) can request a tool call, `runSharedAgent` executes it via the SAME `SourceAdapter`/registry the legacy runtime already uses, feeds the result back, and repeats up to a step limit — structurally the same loop as `server/agent/runtime.ts`'s `runLoop`. Scope for this phase, explicit and temporary (`server/agent/tools/index.ts`'s `SHARED_AGENT_TOOL_SOURCES`): Commas's 5 read tools only — no OAuth connectors, no write tool. The exact 4-question test flow from the task ("Tell me about dispute #2481." → "Why was it disputed?" → "What evidence do we currently have?" → "Has this customer purchased from us before?") passes both in tests and live in-browser, entirely from GLOBAL chat, entirely tool-grounded, with the dispute recalled across turns from conversation history rather than repeated by the user.
+The agent can now propose, not just describe: `propose_add_evidence` and `propose_draft_response` (`server/agent/actions/index.ts`) are LLM-visible tools, wired into the legacy runtime's real tool-calling loop, offered only for an ACTIVE dispute (never a resolved one — enforced server-side, before the LLM even sees the tools exist). Every proposal renders inline in the chat as a `ProposedActionCard` with explicit approve/decline controls — nothing executes until clicked. Approving calls the exact same `addEvidenceItem`/`setResponseDraft` functions the Resolution Center's own manual "Add evidence" button and response textarea already use (now lifted into `useChatStore` so both the chat and the Resolution Center read/write one shared state), so the checklist and response draft genuinely update — live-verified end to end, including the resolved-dispute restriction.
 
 ## Phase log
 
@@ -42,7 +42,8 @@ The shared agent's loop is now a real tool-calling loop, not conversation-only: 
 | 2 | Foundational shared agent runtime — session/context/runtime modules, streaming LLM client (real + stub), `POST /api/agent/stream`, global-chat wiring | ✅ Implemented, live-verified — 2026-08-24 |
 | 3 | Shared agent context and session model — `AgentContext` (dispute facts, evidence, workspace summary, investigation progress), unified into both runtimes, isolation-tested | ✅ Implemented, live-verified — 2026-08-24 |
 | 4 | First real tool layer — Commas read tools wired into the shared agent's own tool-calling loop, reusing the existing adapter/registry architecture | ✅ Implemented, live-verified — 2026-08-24 |
-| 5 | Write actions / propose-approve pipeline for the shared agent; wider (non-Commas) source tools once OAuth connectors exist | ⏳ Next |
+| 5 | Agent-initiated application actions — propose → approve → execute → UI-updates for evidence and response drafts, ACTIVE/RESOLVED dispute gating | ✅ Implemented, live-verified — 2026-08-24 |
+| 6 | Same propose/approve action pipeline for the shared agent (global chat) once dispute chats move off the legacy transport; wider (non-Commas) source tools once OAuth connectors exist | ⏳ Next |
 
 ## Phase 2 — what was built
 
@@ -290,24 +291,94 @@ No file under `src/` was touched this phase — the entire tool layer is server-
 - `npm run build` — clean.
 - Live in-browser walkthrough — see above.
 
+## Phase 5 — what was built
+
+### The propose → approve → execute → UI-updates pipeline
+
+`server/agent/actions/index.ts` (filled in from its Phase 2 placeholder) defines two LLM-visible tools that never touch a `SourceAdapter` — they have no external source, only the seller's own case state:
+
+| Tool | Covers (from the task's list) | Approving calls |
+|---|---|---|
+| `propose_add_evidence` | recommend evidence, prepare evidence for review, add proposed evidence to the case | `addEvidenceItem(disputeId, item)` — the same function the Resolution Center's manual "Add evidence" button already calls |
+| `propose_draft_response` | draft a case response, update the response draft | `setResponseDraft(disputeId, text)` — the same state the "Your response" textarea already reads/writes |
+
+"Open a dispute" and "focus/highlight relevant evidence" are the two listed action types **not** wired to a real execution this phase — see Known limitations for why, and what a proposal for them would need.
+
+`buildProposedAction()` validates a tool call's raw input before turning it into a `ProposedAction` — a malformed call (missing fields) becomes `undefined`, fed back to the LLM as a tool error, never a half-formed proposal. `server/agent/runtime.ts`'s loop recognizes these tool names (`PROPOSE_ACTION_TOOL_NAMES`) and intercepts them before the normal adapter-dispatch path: no adapter call, no write-approval pause — the runtime just records the proposal and feeds back a synthetic "noted" result so the LLM's own turn continues normally to a final answer. `MAX_ITERATIONS` moved 6 → 8 to fit the extra step onto the existing 5-tool investigation chain without truncating (a real regression two existing tests caught immediately).
+
+### ACTIVE vs RESOLVED — enforced before the LLM ever sees the tools
+
+`availableToolsFor` (`server/agent/runtime.ts`) only appends the two propose-tools when `context.dispute?.status === "Needs response"` — a resolved dispute's chat never has them in its tool list at all, so there's no "the model tried to propose something and got refused" path to get wrong; the capability simply doesn't exist for that turn. `ProposedActionCard.tsx` adds a second, independent check (looking up the dispute's live status itself) as defense in depth, rendering a plain non-actionable note instead of approve/decline controls if a proposal ever somehow targeted a resolved dispute.
+
+### One case-state store, not two
+
+`evidenceByDispute`/`addEvidenceItem` moved from local state in `App.tsx` into `useChatStore` (mirroring the existing `markedReadyDisputeIds` pattern from Phase 2); the response draft (previously ephemeral `useState("")` inside `DisputeDetail`, never lifted, "Save draft" was cosmetic) moved there too as new `responseDraftByDispute`/`setResponseDraft` state. `App.tsx` and `DisputeDetail.tsx` now read/write through `useChatStore()` instead of local state, with their own external props/behavior otherwise unchanged — the Resolution Center is still the only UI that *renders* this state, the chat only ever proposes changes to it through the same functions the manual UI already used. `resetDemo()` now genuinely resets evidence and drafts too (previously required a page reload as a workaround, noted honestly in Phase 2 — now fixed as a natural consequence of this move, not separately scoped work).
+
+### Grounded, never fabricated evidence recommendations
+
+`buildEvidenceProposal` (`server/llm/stubClient.ts`) only proposes what's backed by an actual tool result this turn: a Fathom-sourced candidate only if `fathom_search_calls` actually found a call; a Gmail-communications candidate only if `gmail_search_threads` was actually checked this turn (an early version cited "Gmail" using the dispute record's own `communicationsSummary` field regardless of whether Gmail was connected for the chat — caught and fixed before committing, since the dispute record carries that field either way but citing an unchecked source as the origin would misattribute it). A dispute with no evidence gaps, or gaps with no real grounding available, gets no proposal at all — never a generic template.
+
+### Verified: real state changes, not chat-local ones
+
+- `tests/server/actions.test.ts` (new) — `buildProposedAction` validation; `runAgentTurn` end to end for both tools on an active dispute (evidence proposal cites the real 42-minute Fathom call; draft proposal's text is never duplicated into the chat's own final answer); a resolved dispute gets zero proposals for either "investigate" or "draft a response"; a context-less run gets none either.
+- `tests/ProposedActions.test.tsx` (new) — the full frontend flow through a real dispute-context chat + mocked `/api/agent/run` response: approving adds every checked item to `useChatStore`'s `evidenceByDispute` (read directly, not inferred from re-rendered UI); unchecking one item before approving adds only what's still checked, with the confirmation count matching exactly (`approvedCount`, stored on the action itself — the checkbox selection is per-mount local UI state and would silently reset to "all checked" on a later remount, a real bug caught while writing this test, fixed before committing); declining adds nothing; approving a draft sets `responseDraftByDispute`; a proposal manually targeting an already-resolved dispute id renders non-actionable.
+
+**Live-verified in-browser**, both servers running, stub LLM, a fresh dispute (Sarah Johnson, #2481, 0 of 6 evidence items):
+1. "Investigate with AI" → "Help me resolve this dispute" → the usual investigation text, plus a **Recommended evidence** card: "I found a Fathom call that appears relevant." with one checked item (title, category, why). Clicked **Add selected (1)** → the Resolution Center's own Evidence checklist immediately showed **"1 of 6 items added"**, "Access & activity records" marked **Added**, the exact Fathom-call item rendered under it — the real page, not a chat-local echo.
+2. Same chat: "draft a response for me" → a **Proposed draft** card with the full draft text previewed. Clicked **Use this draft** → the Resolution Center's "Your response" textarea immediately contained that exact text.
+3. Priya Nair's resolved dispute (#2390, "Won"): no "Investigate with AI" button, no Add/Add-another controls on the page at all (pre-existing, unaffected). Direct backend check with the same prompts: `proposedActions` is `undefined`, `draft a response for me` returns the authored "already resolved" text instead.
+4. Console: no errors throughout.
+
+*(One environment note, not a product bug: an early check of this flow against a chat created in an earlier phase — before `DisputeContextDetail` gained `status`/`evidenceSummary` — silently got no proposals, because that stale localStorage-persisted `chat.context` was missing the newer fields `availableToolsFor` gates on. A fresh chat (or "Reset all demo data") doesn't have this issue; there's no code path in the current app that creates a chat with an incomplete context.)*
+
+### Files created
+
+| File | Purpose |
+|---|---|
+| `server/agent/actions/index.ts` | `propose_add_evidence`/`propose_draft_response` tool defs, `buildProposedAction()` |
+| `src/components/chat/ProposedActionCard.tsx` | Renders one proposal inline under the message that made it — approve/decline, resolved-state confirmation, resolved-dispute defense in depth |
+| `tests/server/actions.test.ts` | `buildProposedAction` + `runAgentTurn` propose-tool coverage, active vs. resolved |
+| `tests/ProposedActions.test.tsx` | Full frontend propose → approve → execute → UI-updates flow |
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `server/agent/runtime.ts` | `availableToolsFor` appends propose-tools only for an active dispute; `runLoop` intercepts propose-tool calls before adapter dispatch; `MAX_ITERATIONS` 6 → 8 |
+| `server/llm/stubClient.ts` | `disputeChainStep` proposes evidence (grounded in what was actually found) after the investigation chain; the "draft" intent proposes instead of returning text directly, when the tool is available |
+| `server/types.ts`, `src/lib/types.ts` | `+ ProposedAction`/`ProposedEvidenceCandidate` types; `AgentRunResponse`/`ChatMessage`/`AgentRunPlan` gain `proposedActions?` |
+| `src/hooks/useChatStore.tsx` | `evidenceByDispute`/`addEvidenceItem` moved in from `App.tsx`; `+ responseDraftByDispute`/`setResponseDraft`; `+ resolveProposedAction`; `applyPlan` attaches `proposedActions` to the new message; `resetDemo` resets the new state too |
+| `src/App.tsx` | Sources `evidenceByDispute`/`addEvidenceItem` from `useChatStore()` instead of local `useState` — same props passed down, unchanged |
+| `src/components/resolution/DisputeDetail.tsx` | Response draft reads/writes via `useChatStore()` instead of local `useState` |
+| `src/components/chat/ChatMessageBubble.tsx`, `ChatMessageList.tsx` | Render `ProposedActionCard` per proposed action on a message; `chatId` threaded through |
+| `src/components/chat/AddCreditsModal.tsx` | Comment fix only — `resetDemo` no longer needs the reload to cover evidence/drafts, though the reload itself stays (still clears transient local UI state) |
+
+### Verification performed
+
+- `npx tsc -b` — clean.
+- `npm run lint` — clean.
+- `npx vitest run` — **158/158 passing** (143 at Phase 4's commit; +15 this phase).
+- `npm run build` — clean.
+- Live in-browser walkthrough — see above.
+
 ## Known limitations (honest, not hidden)
 
-- **Dispute chats still don't route through the shared agent's streaming endpoint.** They keep the legacy `/api/agent/run` path (the full 6-source tool set, write-approval) entirely unchanged — deliberate: bringing dispute chats onto SSE would need a write-approval story SSE doesn't have yet (see next point). The shared agent's own dispute-mode tool-calling is real and tested, just not yet the frontend's actual dispute-chat transport.
-- **No write tool, no approval flow, for the shared agent.** `commas_mark_dispute_response_ready` is excluded from `sharedAgentToolsFor` entirely — pausing an SSE stream mid-flight for approval has no established pattern in this codebase yet (the legacy runtime's `pendingApproval` is a JSON round-trip). `pendingActions` (the context model's placeholder) is still always `[]`.
-- **Commas only — no Fathom/Zoom/Gmail/Calendar/GoHighLevel tools for the shared agent yet**, by explicit instruction this phase ("do not implement OAuth connectors yet"). Their adapters and registry entries already exist unchanged; widening `SHARED_AGENT_TOOL_SOURCES` is the entire change needed later.
-- **No separate "product information," "policies," or "access/activity records" tools.** Inspected the actual data model before building anything: none of these exist as queryable structured data in this prototype (evidence categories are UI checklist labels; access-activity detail like "14 logins" is narrative prose inside `likelyReason`, not a field) — only `commas_get_dispute`/`commas_list_disputes`/customer/transaction tools have real structured data behind them, so only those were wired up.
-- **Session memory is still in-process only** (unchanged from Phase 2 — no `data/state.json` persistence for either runtime).
+- **"Open a dispute" and "focus/highlight relevant evidence" have no real execution this phase.** Both are in the task's list of potential actions; the two actually wired (add evidence, draft response) are the ones the given examples demonstrate and the ones with an unambiguous, already-existing state to mutate. "Open a dispute" is a GLOBAL-chat action (navigating *to* a dispute) but GLOBAL chat runs on the shared agent, not the legacy runtime this phase's propose-tools live on — wiring it would mean either adding propose-tools to the shared agent too (its own open item, see Phase 6 below) or a separate mechanism. "Focus/highlight evidence" has no existing highlight/scroll-to affordance in `DisputeDetail` to hook into without a UI change, which was out of scope.
+- **The propose/approve pipeline exists only in the legacy runtime.** Dispute chats still don't route through the shared agent's streaming endpoint (unchanged from Phase 4) — a deliberate, repeatedly-reaffirmed risk decision, not an oversight. `pendingActions` (the shared context model's placeholder field) is still always `[]`.
+- **`commas_mark_dispute_response_ready` is unaffected** — it's a genuinely different kind of action (marks the dispute record itself ready via a real, if simulated, "write" tool call) and keeps using the pre-existing `pendingApproval` blocking-pause mechanism, not the new non-blocking `ProposedAction` one. Two related-but-distinct approval mechanisms now coexist in the legacy runtime for two different reasons (one pauses an in-progress tool loop; one attaches a reviewable card to a completed turn) — not consolidated into one this phase.
+- **Commas only, no OAuth connectors, no wider tool set for the shared agent** (unchanged from Phase 4).
+- **Session memory is still in-process only** (unchanged from Phase 2).
 - **`server/types.ts` / `src/lib/types.ts`** still hand-mirrored, not unified into a `shared/` module (architecture §10).
 
 ## Implementation sequence (from architecture §11)
 
-1. ~~Live model on the existing loop (no UI change)~~ — **done in Phase 2**, plus streaming + sessions pulled forward from §11's phases 3–4.
-2. One dataset + wider Commas/connector tools with citations — **Commas tools done this phase**; connector (Fathom/Zoom/Gmail/Calendar/GoHighLevel) tools for the shared agent still open, blocked on their OAuth story per this phase's own instruction
-3. ~~Server-side sessions + context envelope + context block~~ — **done in Phase 3**: `AgentContext` is the envelope, shared by both runtimes, isolation-tested
-4. Streaming SSE transport consumed by `useChatStore` — **done in Phase 2**
-5. Dispute-mode investigation prompt (loop, stopping criteria, report format) — the shared agent's tool-calling loop (this phase) is the mechanism; a dedicated investigation *prompt/strategy* on top of it is still open
-6. Resolution Center persistence + proposal/approval actions (`ProposalCard`, executors) — `pendingActions`'s slot exists in the context model, unpopulated; needs the write-approval-over-SSE story above first
-7. Global-mode polish, hardening, docs, regression suite
+1. ~~Live model on the existing loop (no UI change)~~ — **done in Phase 2**.
+2. One dataset + wider Commas/connector tools with citations — **Commas read tools done in Phase 4**; connector tools still blocked on OAuth
+3. ~~Server-side sessions + context envelope + context block~~ — **done in Phase 3**.
+4. Streaming SSE transport consumed by `useChatStore` — **done in Phase 2**.
+5. Dispute-mode investigation prompt (loop, stopping criteria, report format) — the tool-calling loop (Phase 4) plus grounded evidence recommendation (this phase) are the mechanism; a dedicated investigation *prompt/strategy* refinement on top is still open
+6. ~~Resolution Center persistence + proposal/approval actions (`ProposalCard`, executors)~~ — **done this phase**: `ProposedActionCard` is that component, `resolveProposedAction` is the executor, evidence/draft state is real and shared with the Resolution Center
+7. Global-mode polish, hardening, docs, regression suite — still open; the same propose/approve pipeline for the shared agent (global chat) is the natural next piece
 
 ## Notes
 

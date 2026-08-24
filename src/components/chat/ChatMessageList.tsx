@@ -29,7 +29,7 @@ export function ChatMessageList({ chat }: { chat: Chat }) {
     <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
       <div className="flex flex-col gap-4 max-w-[720px] mx-auto">
         {chat.messages.map((message) => (
-          <ChatMessageBubble key={message.id} message={message} />
+          <ChatMessageBubble key={message.id} message={message} chatId={chat.id} />
         ))}
         {isRunningHere && !isStreamingWithContent && (
           <div className="flex justify-start">

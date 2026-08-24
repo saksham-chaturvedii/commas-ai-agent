@@ -225,10 +225,14 @@ export function DisputeDetail({
   onBack: () => void;
   onInvestigate: () => void;
 }) {
-  const [response, setResponse] = useState("");
   const [justSaved, setJustSaved] = useState(false);
-  const { markedReadyDisputeIds } = useChatStore();
+  const { markedReadyDisputeIds, responseDraftByDispute, setResponseDraft } = useChatStore();
   const markedReadyByAI = markedReadyDisputeIds.includes(disputeId);
+  // Lifted to useChatStore (docs/AI_ASSISTANT_ARCHITECTURE.md §7) so the chat's
+  // `propose_draft_response` approval flow can set it too — the same state this textarea reads,
+  // never a separate copy. Still survives navigating back to the RC list and returning, same as
+  // before, since it now lives above DisputeDetail's own mount lifecycle instead of local state.
+  const response = responseDraftByDispute[disputeId] ?? "";
   const dispute = getDispute(disputeId);
   // "Needs response" is the only non-terminal status this prototype's data models today;
   // written as a negation (rather than === "Won") so a future "Lost" status is read-only too
@@ -322,7 +326,7 @@ export function DisputeDetail({
               <div className="textarea-shell">
                 <textarea
                   value={response}
-                  onChange={(e) => setResponse(e.target.value)}
+                  onChange={(e) => setResponseDraft(disputeId, e.target.value)}
                   placeholder="Describe why this dispute should be resolved in your favor... (ask the AI to draft this for you)"
                 />
               </div>

@@ -158,7 +158,7 @@ export class StubLlmClient implements LlmClient {
           };
         }
         if (disputeIntent) {
-          return this.answerDisputeIntent(disputeIntent, toolHistory, disputeId, hasTool("gmail_search_threads"));
+          return this.answerDisputeIntent(disputeIntent, toolHistory, disputeId, hasTool("gmail_search_threads"), hasTool);
         }
 
         // No specific intent worded — a bare "tell me about dispute #2481" gets a general
@@ -181,7 +181,7 @@ export class StubLlmClient implements LlmClient {
           const email = context.dispute?.customerEmail ?? "";
           return { type: "tool_call", toolCallId: newId(), toolName: "gmail_search_threads", input: { with_email: email } };
         }
-        return this.answerDisputeIntent(disputeIntent, toolHistory, context.id, hasTool("gmail_search_threads"));
+        return this.answerDisputeIntent(disputeIntent, toolHistory, context.id, hasTool("gmail_search_threads"), hasTool);
       }
     }
 
@@ -313,7 +313,81 @@ export class StubLlmClient implements LlmClient {
       return { type: "tool_call", toolCallId: newId(), toolName: "zoom_list_meetings", input: { attendee_email: customerEmail } };
     }
 
+    // One evidence-recommendation pass, after every available source has been checked but
+    // before synthesizing the final answer — grounded only in what was actually found this
+    // turn (see buildEvidenceProposal), never a generic per-dispute template.
+    if (!calledNames.has("propose_add_evidence") && hasTool("propose_add_evidence")) {
+      const proposal = this.buildEvidenceProposal(toolHistory);
+      if (proposal) {
+        return { type: "tool_call", toolCallId: newId(), toolName: "propose_add_evidence", input: proposal };
+      }
+    }
+
     return this.synthesizeDisputeInvestigation(toolHistory, disputeId, availableTools.map((t) => t.name));
+  }
+
+  /** Builds evidence candidates strictly from facts already on hand this turn: the dispute's own
+   * `evidenceMissing` gaps, filled only where a real tool result backs the claim (a Fathom call
+   * that was actually found, the dispute's own authored `communicationsSummary`/`likelyReason`
+   * fields) — never a category proposed with nothing concrete behind it. Returns `undefined` when
+   * there's genuinely nothing to recommend (no gaps, or no grounding for any of them), matching
+   * "if data does not exist, say so" rather than fabricating a plausible-looking candidate. */
+  private buildEvidenceProposal(toolHistory: ToolCallRecord[]): { summary: string; items: Record<string, unknown>[] } | undefined {
+    const disputeResult = toolHistory.find((t) => t.toolName === "commas_get_dispute")?.result;
+    if (!disputeResult?.ok) return undefined;
+    const d = (disputeResult.data as { dispute: DisputeShape }).dispute;
+    if (d.evidenceMissing.length === 0) return undefined;
+
+    const items: Record<string, unknown>[] = [];
+
+    const fathomResult = toolHistory.find((t) => t.toolName === "fathom_search_calls")?.result;
+    const calls = fathomResult?.ok ? ((fathomResult.data as { calls: { durationMinutes: number }[] }).calls ?? []) : [];
+    if (calls.length > 0 && d.evidenceMissing.includes("Access & activity records")) {
+      items.push({
+        category: "Access & activity records",
+        title: `Fathom call — ${calls[0].durationMinutes}-minute session`,
+        record: `A recorded ${calls[0].durationMinutes}-minute call with ${d.customerName} on Fathom.`,
+        why: "Shows direct engagement with the product around the time of purchase.",
+        sourceType: "activity",
+        sourceLabel: "Fathom",
+      });
+    }
+
+    // Only proposed when gmail_search_threads was actually called this turn — d.communicationsSummary
+    // is present on the dispute record regardless of whether Gmail is enabled for this chat, but
+    // citing "Gmail" as the source when Gmail was never actually checked would misattribute it,
+    // the same discipline synthesizeDisputeInvestigation already applies to its own findings.
+    const gmailChecked = toolHistory.some((t) => t.toolName === "gmail_search_threads");
+    if (gmailChecked && d.evidenceMissing.includes("Customer communications") && d.communicationsSummary) {
+      items.push({
+        category: "Customer communications",
+        title: "Customer correspondence",
+        record: d.communicationsSummary,
+        why: "Direct correspondence relevant to this dispute.",
+        sourceType: "communication",
+        sourceLabel: "Gmail",
+      });
+    }
+
+    if (d.evidenceMissing.includes("Access & activity records") && !items.some((i) => i.category === "Access & activity records")) {
+      items.push({
+        category: "Access & activity records",
+        title: "Account activity summary",
+        record: d.likelyReason,
+        why: "Documents the customer's engagement with the product.",
+        sourceType: "activity",
+        sourceLabel: "Commas",
+      });
+    }
+
+    if (items.length === 0) return undefined;
+    return {
+      summary:
+        items.length === 1
+          ? `I found ${items[0].sourceLabel === "Fathom" ? "a Fathom call" : "evidence"} that appears relevant.`
+          : `I found ${items.length} strong evidence items.`,
+      items,
+    };
   }
 
   /** Synthesizes the multi-source investigation answer. Grounded in the specific dispute's
@@ -608,6 +682,7 @@ export class StubLlmClient implements LlmClient {
     toolHistory: ToolCallRecord[],
     disputeId: string,
     gmailAvailable: boolean,
+    hasTool: (name: string) => boolean,
   ): LlmStepResult {
     const result = toolHistory.find((t) => t.toolName === "commas_get_dispute")?.result;
     if (!result) {
@@ -626,9 +701,28 @@ export class StubLlmClient implements LlmClient {
     const isResolved = d.scenario === "resolved";
     const isHighRisk = d.scenario === "high_risk";
 
+    const calledNames = toolHistory.map((t) => t.toolName);
+
     switch (intent) {
-      case "draft":
+      case "draft": {
+        // An active dispute has the propose-tool available: route the draft through the
+        // approval card instead of dropping the full text straight into the chat. A resolved
+        // dispute never gets the propose-tool (server/agent/runtime.ts's availableToolsFor) —
+        // `d.draftResponse` for those cases is already an authored "nothing to draft" line, so
+        // falling back to plain text is correct there, not a degraded path.
+        if (hasTool("propose_draft_response")) {
+          if (!calledNames.includes("propose_draft_response")) {
+            return {
+              type: "tool_call",
+              toolCallId: newId(),
+              toolName: "propose_draft_response",
+              input: { summary: "I can draft a response based on the evidence.", draftText: d.draftResponse },
+            };
+          }
+          return { type: "final", text: "I've put together a draft based on the evidence — review it below." };
+        }
         return { type: "final", text: d.draftResponse };
+      }
 
       case "communications": {
         const gmailResult = toolHistory.find((t) => t.toolName === "gmail_search_threads")?.result;

@@ -58,7 +58,46 @@ export interface ChatMessage {
    * (used to suppress the redundant "Thinking…" indicator once real text has started arriving —
    * see ChatMessageList.tsx); absent/false renders identically to a normal message. */
   streaming?: boolean;
+  /** Zero or more agent-proposed actions attached to this specific message
+   * (docs/AI_ASSISTANT_ARCHITECTURE.md §7) — rendered inline as approve/decline controls
+   * (ProposedActionCard.tsx). `status` starts "pending" and is advanced in place, client-side
+   * only, the moment the seller clicks approve/decline (useChatStore's `resolveProposedAction`)
+   * — never round-tripped back to the server, unlike the write-tool `pendingApproval` flow. */
+  proposedActions?: ProposedAction[];
 }
+
+export type ProposedActionStatus = "pending" | "approved" | "declined";
+
+/** A candidate evidence item the agent found grounds for — never added to the case itself until
+ * approved (server/agent/actions/index.ts). `sourceType` mirrors src/lib/disputeData.ts's
+ * `EvidenceSourceType` (kept as a plain string on the wire so the server doesn't need to import
+ * a frontend type — narrowed back to `EvidenceSourceType` only at the point of actually
+ * constructing an `AIEvidenceItem`, in useChatStore's `resolveProposedAction`). */
+export interface ProposedEvidenceCandidate {
+  category: string;
+  title: string;
+  record: string;
+  why: string;
+  sourceType: string;
+  sourceLabel: string;
+}
+
+export type ProposedAction =
+  | {
+      id: string;
+      type: "add_evidence";
+      disputeId: string;
+      summary: string;
+      items: ProposedEvidenceCandidate[];
+      status: ProposedActionStatus;
+      /** How many of `items` were actually kept checked at approval time — set only once
+       * `status` becomes "approved" (useChatStore's `resolveProposedAction`). Not derivable
+       * from any live UI state at render time (the checkbox selection is ephemeral, per-mount
+       * local state that would silently reset to "all checked" on a later remount), so the
+       * approved count has to be recorded on the action itself to render correctly afterward. */
+      approvedCount?: number;
+    }
+  | { id: string; type: "draft_response"; disputeId: string; summary: string; draftText: string; status: ProposedActionStatus };
 
 /** Structured dispute facts, attached to dispute-context chats so the agent has them without
  * a tool call or the user copy/pasting anything (PROTOTYPE_SPEC.md §2.11). */

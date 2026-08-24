@@ -86,6 +86,27 @@ export type AgentErrorCode =
   | "empty_result"
   | "unknown";
 
+/** A single agent-recommended evidence item (docs/AI_ASSISTANT_ARCHITECTURE.md §7) — never
+ * added to the case itself; only ever a candidate the seller can approve. `sourceType` mirrors
+ * src/lib/disputeData.ts's `EvidenceSourceType` union, kept as a plain string here since server
+ * code can't import frontend types. */
+export interface ProposedEvidenceCandidate {
+  category: string;
+  title: string;
+  record: string;
+  why: string;
+  sourceType: string;
+  sourceLabel: string;
+}
+
+/** An action the agent proposes but never executes itself — see server/agent/actions/index.ts.
+ * `status` starts "pending" server-side and is only ever advanced client-side, once the seller
+ * actually clicks approve/decline; the server never learns the outcome (this is a UI-local
+ * decision, not a round-tripped one, unlike the write-tool `pendingApproval` flow above). */
+export type ProposedAction =
+  | { id: string; type: "add_evidence"; disputeId: string; summary: string; items: ProposedEvidenceCandidate[]; status: "pending" }
+  | { id: string; type: "draft_response"; disputeId: string; summary: string; draftText: string; status: "pending" };
+
 /** Response body for POST /api/agent/run and /api/agent/approve. */
 export interface AgentRunResponse {
   steps: ProgressStep[];
@@ -95,4 +116,8 @@ export interface AgentRunResponse {
   /** Set instead of a final answer when the agent wants to run a write tool — the run pauses
    * here until the client calls /api/agent/approve. */
   pendingApproval?: PendingApproval;
+  /** Zero or more actions the agent proposed this turn (server/agent/actions/index.ts) —
+   * additive to `answer`, never a substitute for it: the turn still ends with a normal final
+   * answer once every proposal this turn has been recorded. */
+  proposedActions?: ProposedAction[];
 }

@@ -1,4 +1,4 @@
-import type { PageContext, PendingApproval, ProgressStep, SourceId, ToolSummaryItem } from "./types";
+import type { PageContext, PendingApproval, ProgressStep, ProposedAction, SourceId, ToolSummaryItem } from "./types";
 
 /**
  * Thin client for the agent backend (server/index.ts) — the only bridge between the UI and
@@ -17,6 +17,10 @@ export interface AgentRunPlan {
   toolSummary: ToolSummaryItem[];
   error?: { code: string; message: string };
   pendingApproval?: PendingApproval;
+  /** Wire shape matches server/types.ts's `ProposedAction` (server `status` is always
+   * "pending" — this client type reuses the richer `ProposedActionStatus` union since a message
+   * carrying this plan advances it locally afterward). */
+  proposedActions?: ProposedAction[];
 }
 
 async function postJson(path: string, body: unknown, signal?: AbortSignal): Promise<AgentRunPlan> {

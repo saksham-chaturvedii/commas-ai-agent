@@ -4,11 +4,13 @@ import type { LlmClient, LlmToolDef, ToolCallRecord } from "../llm/types.js";
 import { AgentError, classifyError } from "./errors.js";
 import { agentContextFromPageContext } from "./context/model.js";
 import { buildContextPrompt } from "./context/buildContext.js";
+import { PROPOSE_ACTION_TOOLS, PROPOSE_ACTION_TOOL_NAMES, buildProposedAction } from "./actions/index.js";
 import type {
   AgentRunResponse,
   ConversationTurn,
   PageContext,
   ProgressStep,
+  ProposedAction,
   SourceId,
   ToolSummaryItem,
 } from "../types.js";
@@ -22,7 +24,12 @@ import type {
  * executing — `runAgentTurn` starts a run, `resumeAfterApproval` continues one past that pause.
  */
 
-const MAX_ITERATIONS = 6;
+// The full multi-source dispute chain is 5 tool calls (commas_get_dispute, crm_get_contact,
+// gmail_search_threads, fathom_search_calls, zoom_list_meetings) + up to 1 more for
+// propose_add_evidence (server/agent/actions/index.ts, Phase 5) + 1 final answer = up to 7
+// iterations for a fully-enabled investigation. 8 leaves a little headroom rather than being
+// exactly tight against today's known-longest chain.
+const MAX_ITERATIONS = 8;
 const TOOL_TIMEOUT_MS = 10_000;
 
 export interface RunAgentTurnArgs {
@@ -60,11 +67,12 @@ export async function runAgentTurn(args: RunAgentTurnArgs): Promise<AgentRunResp
     llmClient,
     adapters,
     registry,
-    availableTools: availableToolsFor(enabledSources, registry),
+    availableTools: availableToolsFor(enabledSources, registry, context),
     systemPrompt: buildSystemPrompt(context),
     toolHistory: [],
     steps: [],
     toolSummary: [],
+    proposedActions: [],
     startIteration: 0,
   });
 }
@@ -109,11 +117,12 @@ export async function resumeAfterApproval(args: ResumeAfterApprovalArgs): Promis
     llmClient,
     adapters,
     registry,
-    availableTools: availableToolsFor(enabledSources, registry),
+    availableTools: availableToolsFor(enabledSources, registry, context),
     systemPrompt: buildSystemPrompt(context),
     toolHistory,
     steps,
     toolSummary,
+    proposedActions: [],
     startIteration: 1,
   });
 }
@@ -130,18 +139,51 @@ interface LoopState {
   toolHistory: ToolCallRecord[];
   steps: ProgressStep[];
   toolSummary: ToolSummaryItem[];
+  proposedActions: ProposedAction[];
   startIteration: number;
 }
 
+function withProposedActions(response: AgentRunResponse, proposedActions: ProposedAction[]): AgentRunResponse {
+  return proposedActions.length > 0 ? { ...response, proposedActions } : response;
+}
+
 async function runLoop(state: LoopState): Promise<AgentRunResponse> {
-  const { prompt, context, conversationHistory, llmClient, adapters, registry, availableTools, systemPrompt, toolHistory, steps, toolSummary, startIteration } = state;
+  const { prompt, context, conversationHistory, llmClient, adapters, registry, availableTools, systemPrompt, toolHistory, steps, toolSummary, proposedActions, startIteration } = state;
 
   try {
     for (let i = startIteration; i < MAX_ITERATIONS; i++) {
       const step = await llmClient.nextStep({ systemPrompt, userPrompt: prompt, context, availableTools, conversationHistory, toolHistory });
 
       if (step.type === "final") {
-        return { steps, answer: step.text, toolSummary };
+        return withProposedActions({ steps, answer: step.text, toolSummary }, proposedActions);
+      }
+
+      // Propose-tools (server/agent/actions/index.ts) never touch a source and never pause for
+      // approval — the runtime only records the proposal and hands it to the client, which is
+      // the one place a click can turn it into a real state change (add evidence / set the
+      // response draft). A malformed call (buildProposedAction returning undefined) is fed back
+      // as a tool error, same as any other tool failure, so the LLM can recover instead of the
+      // proposal silently vanishing.
+      if (PROPOSE_ACTION_TOOL_NAMES.has(step.toolName)) {
+        const disputeId = context?.kind === "dispute" ? context.id : undefined;
+        const proposed = disputeId ? buildProposedAction(disputeId, step.toolName, step.input) : undefined;
+        if (proposed) {
+          proposedActions.push(proposed);
+          toolHistory.push({
+            toolCallId: step.toolCallId,
+            toolName: step.toolName,
+            input: step.input,
+            result: { ok: true, data: { proposed: true } },
+          });
+        } else {
+          toolHistory.push({
+            toolCallId: step.toolCallId,
+            toolName: step.toolName,
+            input: step.input,
+            result: { ok: false, data: "That proposal was missing required details — try again with the specifics filled in." },
+          });
+        }
+        continue;
       }
 
       const registered = registry.get(step.toolName);
@@ -185,16 +227,24 @@ async function runLoop(state: LoopState): Promise<AgentRunResponse> {
       toolHistory.push({ toolCallId: step.toolCallId, toolName: step.toolName, input: step.input, result: { ok, data: resultData } });
     }
 
-    return {
-      steps,
-      answer: "I couldn't finish that within the step limit — try asking a narrower question.",
-      toolSummary,
-    };
+    return withProposedActions(
+      {
+        steps,
+        answer: "I couldn't finish that within the step limit — try asking a narrower question.",
+        toolSummary,
+      },
+      proposedActions,
+    );
   } catch (err) {
     // Unrecoverable: the LLM itself failed (auth, connectivity, malformed response) rather
-    // than a single tool call. The UI gets a distinct error state, not a fabricated answer.
+    // than a single tool call. The UI gets a distinct error state, not a fabricated answer. Any
+    // proposals already fully formed before the failure are still valid and still surfaced —
+    // losing them because of an unrelated later failure would be needlessly wasteful.
     const classified = err instanceof AgentError ? err : classifyError(err);
-    return { steps, answer: "", toolSummary, error: { code: classified.code, message: classified.message } };
+    return withProposedActions(
+      { steps, answer: "", toolSummary, error: { code: classified.code, message: classified.message } },
+      proposedActions,
+    );
   }
 }
 
@@ -205,10 +255,18 @@ function findAdapter(adapters: SourceAdapter[], sourceId: SourceId) {
 /** Tools from every source enabled for this chat — read AND write (the LLM must be able to
  * see a write tool exists to propose it; the runtime, not tool visibility, is what gates
  * execution). */
-function availableToolsFor(enabledSources: SourceId[], registry: Map<string, RegisteredTool>): LlmToolDef[] {
-  return Array.from(registry.values())
+/** Tools from every source enabled for this chat — read AND write (the LLM must be able to
+ * see a write tool exists to propose it; the runtime, not tool visibility, is what gates
+ * execution) — plus, for an ACTIVE dispute chat only, the agent-action propose-tools
+ * (server/agent/actions/index.ts). Never offered for a RESOLVED dispute (status !== "Needs
+ * response") or a non-dispute chat — there is no case to add evidence to or draft a response
+ * for, so the tools simply don't exist for the LLM to see, not just hidden after the fact. */
+function availableToolsFor(enabledSources: SourceId[], registry: Map<string, RegisteredTool>, context?: PageContext): LlmToolDef[] {
+  const sourceTools = Array.from(registry.values())
     .filter((t) => enabledSources.includes(t.sourceId))
     .map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
+  const disputeIsActive = context?.kind === "dispute" && context.dispute?.status === "Needs response";
+  return disputeIsActive ? [...sourceTools, ...PROPOSE_ACTION_TOOLS] : sourceTools;
 }
 
 function buildApprovalSummary(registered: RegisteredTool | undefined, input: Record<string, unknown>): string {
