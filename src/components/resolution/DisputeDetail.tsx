@@ -5,6 +5,7 @@ import {
   DollarSign,
   Calendar,
   CircleDashed,
+  ChevronDown,
   FileText,
   Image as ImageIcon,
   Receipt,
@@ -15,6 +16,7 @@ import {
 import { Badge } from "../shell/Badge";
 import { CardTitle } from "./CardTitle";
 import { AddEvidenceModal } from "./AddEvidenceModal";
+import { EvidenceDetailDrawer } from "./EvidenceDetailDrawer";
 import { evidenceCategories, getDispute, type AIEvidenceItem, type EvidenceFileMeta } from "../../lib/disputeData";
 import { formatFileSize } from "../../lib/evidenceUpload";
 import { useChatStore } from "../../hooks/useChatStore";
@@ -133,7 +135,14 @@ function ManualEvidenceCard({
   const [justAdded, setJustAdded] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<EvidenceFileMeta | null>(null);
   const [inspecting, setInspecting] = useState<InspectableEvidence | null>(null);
-  const { verifyEvidenceItem } = useChatStore();
+  // Accordion state: which category rows are expanded — starts empty (every category collapsed)
+  // so the checklist reads as a scannable list of categories first, detail only on request.
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+  // The drawer holds an id, not a snapshot of the item — so an edit or "mark as reviewed" made
+  // while it's open is reflected immediately (the live item is looked up from `evidenceItems`
+  // below), instead of the drawer showing stale data until it's reopened.
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const { verifyEvidenceItem, updateEvidenceItem } = useChatStore();
 
   const itemsByCategory = new Map<string, AIEvidenceItem[]>();
   for (const item of evidenceItems) {
@@ -142,12 +151,23 @@ function ManualEvidenceCard({
   const addedCount = evidenceCategories.filter(
     (c) => initialAdded.includes(c.label) || (itemsByCategory.get(c.label)?.length ?? 0) > 0,
   ).length;
+  const selectedItem = evidenceItems.find((i) => i.id === selectedItemId) ?? null;
 
   const handleAdd = (item: AIEvidenceItem) => {
     onAddEvidence(item);
     setModalFor(null);
     setJustAdded(`"${item.title}" added${item.files.length > 0 ? ` — ${item.files.length} file${item.files.length === 1 ? "" : "s"}` : ""}.`);
     window.setTimeout(() => setJustAdded(null), 3000);
+    setExpandedCategories((prev) => new Set(prev).add(item.category));
+  };
+
+  const toggleCategory = (label: string) => {
+    setExpandedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
   };
 
   return (
@@ -167,9 +187,15 @@ function ManualEvidenceCard({
         {evidenceCategories.map((item) => {
           const items = itemsByCategory.get(item.label) ?? [];
           const isAdded = initialAdded.includes(item.label) || items.length > 0;
+          const isExpanded = expandedCategories.has(item.label);
           return (
             <div key={item.label} className="py-3 border-t border-[#ebebeb] first:border-t-0">
-              <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => toggleCategory(item.label)}
+                className="w-full flex items-center gap-3 text-left cursor-pointer"
+                aria-expanded={isExpanded}
+              >
                 <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-[#fafafa] border border-[#ebebeb] shrink-0">
                   <FileText size={15} strokeWidth={1.75} className="text-[#9ca3af]" />
                 </div>
@@ -179,70 +205,84 @@ function ManualEvidenceCard({
                 </div>
                 {isAdded ? <Badge variant="success">Added</Badge> : <Badge variant="neutral">Not added</Badge>}
                 {!isResolved && (
-                  <button
-                    type="button"
+                  <span
+                    role="button"
+                    tabIndex={0}
                     className="btn-toolbar shrink-0"
                     style={{ height: 29 }}
-                    onClick={() => setModalFor(item.label)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setModalFor(item.label);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setModalFor(item.label);
+                      }
+                    }}
                   >
                     Add evidence
-                  </button>
+                  </span>
                 )}
-              </div>
+                <ChevronDown
+                  size={16}
+                  strokeWidth={1.75}
+                  className="text-[#9ca3af] shrink-0 transition-transform"
+                  style={{ transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)" }}
+                />
+              </button>
 
-              {items.length > 0 && (
-                <ul className="flex flex-col gap-2.5 mt-2.5 pl-11">
-                  {items.map((si) => (
-                    <li key={si.id}>
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <div className="text-[12.5px] font-medium text-[#1a1a1a]">{si.title}</div>
-                        {si.addedBy === "ai" &&
-                          (si.verifiedByHuman ? (
-                            <Badge variant="success">Reviewed</Badge>
-                          ) : (
-                            <Badge variant="info">AI found</Badge>
-                          ))}
-                      </div>
-                      {si.record && <div className="text-[12px] leading-[17px] text-[#6b7280] mt-0.5">{si.record}</div>}
-                      {si.files.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 mt-1.5">
-                          {si.files.map((f, i) => (
-                            <AttachmentChip key={`${si.id}-${i}`} file={f} onPreview={setPreviewFile} />
-                          ))}
-                        </div>
-                      )}
-                      {si.addedBy === "ai" && (
-                        <div className="flex items-center gap-3 mt-1.5">
-                          <button
-                            type="button"
-                            className="text-[12px] font-medium text-[var(--color-agent-accent)] cursor-pointer"
-                            onClick={() =>
-                              setInspecting({
-                                title: si.title,
-                                category: si.category,
-                                why: si.why,
-                                record: si.record,
-                                sourceLabel: si.sourceLabel,
-                                sourceId: sourceIdFromLabel(si.sourceLabel),
-                              })
-                            }
+              {isExpanded && (
+                <div className="mt-2.5 pl-11">
+                  {items.length > 0 ? (
+                    <ul className="flex flex-col gap-1.5">
+                      {items.map((si) => (
+                        <li key={si.id}>
+                          {/* A real <button> can't contain AttachmentChip's own <button>s (invalid
+                             * HTML — the browser silently un-nests them, breaking clicks), so this
+                             * row uses role="button" instead, exactly like the category header
+                             * above does for the same reason. */}
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setSelectedItemId(si.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setSelectedItemId(si.id);
+                              }
+                            }}
+                            className="w-full text-left py-2 px-2.5 rounded-lg bg-[#fafafa] border border-[#ebebeb] hover:border-[#d9d9d9] cursor-pointer transition-colors"
                           >
-                            Inspect
-                          </button>
-                          {!si.verifiedByHuman && !isResolved && (
-                            <button
-                              type="button"
-                              className="text-[12px] font-medium text-[#6b7280] hover:text-[#1a1a1a] cursor-pointer"
-                              onClick={() => verifyEvidenceItem(disputeId, si.id)}
-                            >
-                              Mark as reviewed
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <div className="text-[12.5px] font-medium text-[#1a1a1a]">{si.title}</div>
+                              {si.addedBy === "ai" &&
+                                (si.verifiedByHuman ? (
+                                  <Badge variant="success">Reviewed</Badge>
+                                ) : (
+                                  <Badge variant="info">AI found</Badge>
+                                ))}
+                            </div>
+                            <div className="text-[11.5px] text-[#9ca3af] mt-0.5">
+                              {si.sourceLabel}
+                              {si.files.length > 0 ? ` · ${si.files.length} file${si.files.length === 1 ? "" : "s"}` : ""}
+                            </div>
+                            {si.files.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()}>
+                                {si.files.map((f, i) => (
+                                  <AttachmentChip key={`${si.id}-${i}`} file={f} onPreview={setPreviewFile} />
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-[12.5px] text-[#9ca3af] py-1">Nothing added to this category yet.</p>
+                  )}
+                </div>
               )}
             </div>
           );
@@ -254,6 +294,33 @@ function ManualEvidenceCard({
       )}
       {previewFile && <AttachmentPreviewOverlay file={previewFile} onClose={() => setPreviewFile(null)} />}
       {inspecting && <EvidenceInspectorModal evidence={inspecting} onClose={() => setInspecting(null)} />}
+      {selectedItem && (
+        <EvidenceDetailDrawer
+          item={selectedItem}
+          editable={!isResolved}
+          onClose={() => setSelectedItemId(null)}
+          onSave={(patch) => updateEvidenceItem(disputeId, selectedItem.id, patch)}
+          onPreviewFile={setPreviewFile}
+          onMarkReviewed={
+            selectedItem.addedBy === "ai" && !selectedItem.verifiedByHuman && !isResolved
+              ? () => verifyEvidenceItem(disputeId, selectedItem.id)
+              : undefined
+          }
+          onInspectSource={
+            selectedItem.addedBy === "ai"
+              ? () =>
+                  setInspecting({
+                    title: selectedItem.title,
+                    category: selectedItem.category,
+                    why: selectedItem.why,
+                    record: selectedItem.record,
+                    sourceLabel: selectedItem.sourceLabel,
+                    sourceId: sourceIdFromLabel(selectedItem.sourceLabel),
+                  })
+              : undefined
+          }
+        />
+      )}
     </div>
   );
 }

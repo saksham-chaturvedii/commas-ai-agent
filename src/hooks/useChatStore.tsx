@@ -196,6 +196,10 @@ interface ChatStoreValue {
   /** Marks one AI-found evidence item as human-verified — the only setter for
    * `AIEvidenceItem.verifiedByHuman`, called only from an explicit "Mark as verified" click. */
   verifyEvidenceItem: (disputeId: string, itemId: string) => void;
+  /** Edits an existing evidence item's title/record (description) — the Evidence Detail
+   * drawer's only mutation, available only while the dispute is still active (the drawer itself
+   * enforces that; this setter has no opinion on dispute status). */
+  updateEvidenceItem: (disputeId: string, itemId: string, patch: { title: string; record: string }) => void;
   /** The seller's editable response draft per dispute — previously local, ephemeral state
    * inside DisputeDetail; lifted here so the chat's `propose_draft_response` approval flow can
    * set it too, and so it survives navigating away from and back to the dispute detail page. */
@@ -725,6 +729,13 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
+  const updateEvidenceItem = useCallback((disputeId: string, itemId: string, patch: { title: string; record: string }) => {
+    setEvidenceByDispute((prev) => ({
+      ...prev,
+      [disputeId]: (prev[disputeId] ?? []).map((item) => (item.id === itemId ? { ...item, ...patch } : item)),
+    }));
+  }, []);
+
   const setResponseDraft = useCallback((disputeId: string, text: string) => {
     setResponseDraftByDispute((prev) => ({ ...prev, [disputeId]: text }));
   }, []);
@@ -893,6 +904,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       evidenceByDispute,
       addEvidenceItem,
       verifyEvidenceItem,
+      updateEvidenceItem,
       responseDraftByDispute,
       setResponseDraft,
       resolveProposedAction,
@@ -922,6 +934,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       evidenceByDispute,
       addEvidenceItem,
       verifyEvidenceItem,
+      updateEvidenceItem,
       responseDraftByDispute,
       setResponseDraft,
       resolveProposedAction,

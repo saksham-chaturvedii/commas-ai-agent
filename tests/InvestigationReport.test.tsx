@@ -211,12 +211,19 @@ describe("AI found vs. human verified — evidence already in the case", () => {
       </ChatStoreProvider>,
     );
 
+    // Categories start collapsed (accordion) — expand this one to see its items.
+    fireEvent.click(screen.getByText("Access & activity records"));
+
     expect(screen.getByText("AI found")).toBeInTheDocument();
     expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
 
+    // "Mark as reviewed" now lives in the Evidence Detail drawer, opened by clicking the entry.
+    fireEvent.click(screen.getByText(aiItem.title));
     fireEvent.click(screen.getByText("Mark as reviewed"));
 
-    expect(screen.getByText("Reviewed")).toBeInTheDocument();
+    // Both the accordion row and the (still-open) drawer now read "Reviewed" — the drawer reads
+    // the live item by id, not a stale snapshot.
+    expect(screen.getAllByText("Reviewed").length).toBeGreaterThan(0);
     expect(screen.queryByText("AI found")).not.toBeInTheDocument();
   });
 
@@ -228,6 +235,11 @@ describe("AI found vs. human verified — evidence already in the case", () => {
       </ChatStoreProvider>,
     );
 
+    fireEvent.click(screen.getByText("Access & activity records"));
+    expect(screen.queryByText("AI found")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText(sellerItem.title));
     expect(screen.queryByText("AI found")).not.toBeInTheDocument();
     expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
     expect(screen.queryByText("Mark as reviewed")).not.toBeInTheDocument();

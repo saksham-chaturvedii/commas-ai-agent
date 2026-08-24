@@ -16,7 +16,9 @@ const BASE_PERSONA =
   "you can do or explain a limitation, speak in plain language about capabilities (e.g. \"look " +
   "up a customer\" or \"check a transaction\") — never mention internal tool/function names " +
   "(the exact identifiers you call, like a snake_case name) to the seller; those are " +
-  "implementation detail, not something they should ever see.";
+  "implementation detail, not something they should ever see. Any \"recommended next steps\" " +
+  "or similar list must be crisp: at most 2-3 bullets, each one sentence, no run-on " +
+  "explanations — a busy seller should be able to scan it in five seconds.";
 
 /** `AgentContext.dispute.reason`/`WorkspaceDisputeSummary.reason` carry the machine reason
  * code (e.g. "product_not_received" — the same value `sourcePriorityFor` keys off of in
