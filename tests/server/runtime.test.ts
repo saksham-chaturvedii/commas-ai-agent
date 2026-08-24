@@ -67,7 +67,9 @@ describe("runAgentTurn — the five required validation scenarios", () => {
     expect(result.error).toBeUndefined();
     expect(result.steps).toHaveLength(1);
     expect(result.steps[0].sourceId).toBe("commas");
-    expect(result.toolSummary).toEqual([{ sourceId: "commas", label: "Customer records", ok: true }]);
+    expect(result.toolSummary).toEqual([
+      { sourceId: "commas", label: "Customer records", ok: true, resultLabel: "Found matching customer records" },
+    ]);
     expect(result.answer).toContain("Sarah Johnson");
     expect(result.answer).toContain("sarah.johnson@email.com");
   });
@@ -83,7 +85,9 @@ describe("runAgentTurn — the five required validation scenarios", () => {
     });
 
     expect(result.error).toBeUndefined();
-    expect(result.toolSummary).toEqual([{ sourceId: "commas", label: "Transaction details", ok: false }]);
+    expect(result.toolSummary).toEqual([
+      { sourceId: "commas", label: "Transaction details", ok: false, resultLabel: "Couldn't check Transaction details" },
+    ]);
     expect(result.answer.toLowerCase()).toContain("couldn't complete");
     expect(result.answer).toContain("txn_doesnotexist");
   });
@@ -151,12 +155,28 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       // one enabled source deliberately skipped (server/llm/stubClient.ts's REASON_SOURCE_PRIORITY).
       const usedSources = new Set(result.steps.map((s) => s.sourceId));
       expect(usedSources).toEqual(new Set(["commas", "gmail", "fathom", "zoom"]));
-      expect(result.answer).toContain("Situation summary");
-      expect(result.answer).toContain("What I found");
-      expect(result.answer.toLowerCase()).toContain("fathom");
-      expect(result.answer).toContain("Missing information");
-      expect(result.answer).toContain("GoHighLevel");
-      expect(result.answer.toLowerCase()).toContain("lower priority");
+
+      // Every step shown to the seller is a real, result-aware completed label — never a bare
+      // "checked X" that doesn't say what was found (docs/AI_ASSISTANT_IMPLEMENTATION_STATUS.md's
+      // current phase: "do not fake completed steps").
+      expect(result.steps.every((s) => typeof s.doneLabel === "string" && s.doneLabel.length > 0)).toBe(true);
+      const disputeStep = result.steps.find((s) => s.id.includes("commas_get_dispute"));
+      expect(disputeStep?.doneLabel).toBe("Reviewed dispute details");
+      const fathomStep = result.steps.find((s) => s.id.includes("fathom_search_calls"));
+      expect(fathomStep?.doneLabel).toBe("Found completed coaching calls");
+      // The evidence cross-reference itself is now a visible step too, not silent.
+      expect(result.steps.some((s) => s.doneLabel === "Cross-referenced evidence")).toBe(true);
+
+      const report = result.investigationReport;
+      expect(report).toBeDefined();
+      expect(report?.disputeId).toBe("2481");
+      expect(report?.caseSummary.toLowerCase()).toContain("fathom");
+      expect(report?.evidenceFound.some((e) => e.sourceLabel === "Fathom")).toBe(true);
+      expect(report?.evidenceFound.some((e) => e.sourceLabel === "GoHighLevel")).toBe(false);
+      expect(report?.missingInformation.some((line) => line.includes("GoHighLevel"))).toBe(true);
+      expect(report?.missingInformation.some((line) => line.toLowerCase().includes("lower priority"))).toBe(true);
+      expect(report?.caseStrength.label).toBeTruthy();
+      expect(report?.recommendedNextAction).toBeTruthy();
     });
 
     it("investigates a product_unacceptable dispute (Marcus Webb #2502) by prioritizing Calendar, Zoom, Fathom, and Gmail, surfacing contradicting evidence", async () => {
@@ -189,14 +209,27 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       expect(result.error).toBeUndefined();
       const usedSources = new Set(result.steps.map((s) => s.sourceId));
       expect(usedSources).toEqual(new Set(["commas", "google-calendar", "zoom", "fathom", "gmail"]));
+
+      const calendarStep = result.steps.find((s) => s.id.includes("calendar_list_events"));
+      expect(calendarStep?.doneLabel).toBe("Found scheduled coaching calls");
+
+      const report = result.investigationReport!;
+      expect(report.disputeId).toBe("2502");
       // the call happened (contradicting "never received the service") but ran short against
-      // the booked time — genuinely ambiguous, supporting-and-contradicting evidence.
-      expect(result.answer.toLowerCase()).toContain("google calendar");
-      expect(result.answer).toContain("30 minutes");
-      expect(result.answer).toContain("14-minute");
-      expect(result.answer).toContain("Missing information");
-      expect(result.answer).toContain("GoHighLevel");
-      expect(result.answer.toLowerCase()).toContain("lower priority");
+      // the booked time — genuinely ambiguous, supporting-and-contradicting evidence, surfaced
+      // as an explicit contradiction rather than buried in prose.
+      const calendarFinding = report.evidenceFound.find((e) => e.sourceLabel === "Google Calendar");
+      expect(calendarFinding?.record).toContain("30 minutes");
+      const fathomFinding = report.evidenceFound.find((e) => e.sourceLabel === "Fathom");
+      expect(fathomFinding?.title).toContain("14-minute");
+      expect(fathomFinding?.raw).toBeDefined();
+      expect((fathomFinding?.raw as { transcriptExcerpt?: string })?.transcriptExcerpt).toBeTruthy();
+      expect(report.potentialContradictions.length).toBeGreaterThan(0);
+      expect(report.potentialContradictions[0]).toContain("30 minutes");
+      expect(report.potentialContradictions[0]).toContain("14");
+      expect(report.missingInformation.some((line) => line.includes("GoHighLevel") && line.toLowerCase().includes("lower priority"))).toBe(
+        true,
+      );
     });
 
     it("investigates a duplicate-charge dispute (Elena Cruz #2417) by prioritizing only Gmail", async () => {
@@ -229,8 +262,9 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       expect(result.error).toBeUndefined();
       const usedSources = new Set(result.steps.map((s) => s.sourceId));
       expect(usedSources).toEqual(new Set(["commas", "gmail"]));
-      expect(result.answer).toContain("Missing information");
-      expect(result.answer.toLowerCase()).toContain("lower priority");
+      const report = result.investigationReport!;
+      expect(report.disputeId).toBe("2417");
+      expect(report.missingInformation.some((line) => line.toLowerCase().includes("lower priority"))).toBe(true);
     });
 
     it("only uses sources actually enabled for the chat, and says what it couldn't check", async () => {
@@ -246,10 +280,12 @@ describe("runAgentTurn — the five required validation scenarios", () => {
 
       const usedSources = new Set(result.steps.map((s) => s.sourceId));
       expect(usedSources).toEqual(new Set(["commas", "fathom"]));
-      expect(result.answer).toContain("Missing information");
-      expect(result.answer).toContain("GoHighLevel");
-      expect(result.answer).toContain("Gmail");
-      expect(result.answer).toContain("Zoom");
+      const report = result.investigationReport!;
+      const notEnabled = report.missingInformation.find((line) => line.includes("not enabled"));
+      expect(notEnabled).toBeDefined();
+      expect(notEnabled).toContain("GoHighLevel");
+      expect(notEnabled).toContain("Gmail");
+      expect(notEnabled).toContain("Zoom");
     });
   });
 
@@ -409,11 +445,15 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         registry,
       });
       expect(result.error).toBeUndefined();
-      expect(result.answer).not.toContain("engaged with the product after purchase");
-      expect(result.answer.toLowerCase()).toContain("wouldn't commit to");
-      // empty external results are reported honestly, never as "wasn't checked"
-      expect(result.answer).not.toContain("no connected apps were available");
-      expect(result.answer.toLowerCase()).toContain("no email threads found");
+      const report = result.investigationReport!;
+      expect(report.caseSummary).not.toContain("engaged with the product after purchase");
+      expect(report.recommendedNextAction.toLowerCase()).toContain("wouldn't commit to");
+      // empty external results are reported honestly at the step level, never omitted or
+      // reported as "wasn't checked" — David has no Gmail threads, so no Gmail entry appears
+      // in "Evidence found" (nothing was found), but the step itself says so explicitly.
+      expect(report.evidenceFound.some((e) => e.sourceLabel === "Gmail")).toBe(false);
+      const gmailStep = result.steps.find((s) => s.id.includes("gmail_search_threads"));
+      expect(gmailStep?.doneLabel).toBe("No email threads found");
     });
 
     it("P0-4: the cross-apps prompt in a GLOBAL chat never gets hijacked into a dispute investigation", async () => {

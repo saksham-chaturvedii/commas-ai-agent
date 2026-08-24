@@ -93,6 +93,49 @@ export function classifyToolName(name: string) {
   };
 }
 
+/**
+ * The completed-step label shown once a read tool's result is actually in hand (the checkmark
+ * state of ProgressBlock.tsx / ToolSummary.tsx) — past-tense and, where it matters, aware of
+ * WHAT was actually found, not just a static rephrasing of `progressLabel`'s in-flight gerund.
+ * "Do not fake completed steps" (docs/AI_ASSISTANT_IMPLEMENTATION_STATUS.md's current phase):
+ * every branch below reads the real `data` shape a tool actually returned — a source that came
+ * back empty says so, never "Found X" it didn't find. A failed call always gets its own
+ * "Couldn't check…" label regardless of tool, since there's nothing in `data` to describe.
+ */
+export function resultLabelFor(toolName: string, ok: boolean, data: unknown): string {
+  const known = KNOWN_TOOLS[toolName];
+  const displayName = known?.displayName ?? toolName;
+  if (!ok) return `Couldn't check ${displayName}`;
+
+  const d = (data && typeof data === "object" ? (data as Record<string, unknown>) : {}) as Record<string, unknown>;
+  const count = (key: string) => (Array.isArray(d[key]) ? (d[key] as unknown[]).length : 0);
+
+  switch (toolName) {
+    case "commas_get_dispute":
+      return "Reviewed dispute details";
+    case "commas_list_disputes":
+      return "Reviewed your disputes";
+    case "fanbasis_list_customers":
+      return count("customers") > 0 ? "Found matching customer records" : "No matching customers found";
+    case "fanbasis_list_transactions":
+      return count("transactions") > 0 ? "Checked transaction history" : "No transactions found";
+    case "fanbasis_get_transaction":
+      return d.transaction ? "Checked transaction details" : "Transaction not found";
+    case "crm_get_contact":
+      return d.contact ? "Found GoHighLevel account history" : "No GoHighLevel contact on file";
+    case "gmail_search_threads":
+      return count("threads") > 0 ? "Reviewed connected communications" : "No email threads found";
+    case "fathom_search_calls":
+      return count("calls") > 0 ? "Found completed coaching calls" : "No recorded calls found";
+    case "zoom_list_meetings":
+      return count("meetings") > 0 ? "Confirmed meeting attendance" : "No Zoom meetings found";
+    case "calendar_list_events":
+      return count("events") > 0 ? "Found scheduled coaching calls" : "No scheduled events found";
+    default:
+      return `Checked ${displayName}`;
+  }
+}
+
 export async function buildToolRegistry(adapters: SourceAdapter[]): Promise<Map<string, RegisteredTool>> {
   const registry = new Map<string, RegisteredTool>();
 

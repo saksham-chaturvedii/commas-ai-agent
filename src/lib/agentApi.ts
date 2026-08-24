@@ -1,4 +1,4 @@
-import type { PageContext, PendingApproval, ProgressStep, ProposedAction, SourceId, ToolSummaryItem } from "./types";
+import type { InvestigationReport, PageContext, PendingApproval, ProgressStep, ProposedAction, SourceId, ToolSummaryItem } from "./types";
 
 /**
  * Thin client for the agent backend (server/index.ts) — the only bridge between the UI and
@@ -21,6 +21,7 @@ export interface AgentRunPlan {
    * "pending" — this client type reuses the richer `ProposedActionStatus` union since a message
    * carrying this plan advances it locally afterward). */
   proposedActions?: ProposedAction[];
+  investigationReport?: InvestigationReport;
 }
 
 async function postJson(path: string, body: unknown, signal?: AbortSignal): Promise<AgentRunPlan> {

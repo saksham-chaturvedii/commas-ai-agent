@@ -18,6 +18,13 @@ import { AddEvidenceModal } from "./AddEvidenceModal";
 import { evidenceCategories, getDispute, type AIEvidenceItem, type EvidenceFileMeta } from "../../lib/disputeData";
 import { formatFileSize } from "../../lib/evidenceUpload";
 import { useChatStore } from "../../hooks/useChatStore";
+import { SOURCES } from "../../lib/mockData";
+import type { SourceId } from "../../lib/types";
+import { EvidenceInspectorModal, type InspectableEvidence } from "../chat/EvidenceInspectorModal";
+
+function sourceIdFromLabel(label: string): SourceId {
+  return SOURCES.find((s) => s.name === label)?.id ?? "commas";
+}
 
 /**
  * Dispute Detail page, ported from commas-ai-copilot and evolved: the old prototype's inline
@@ -108,11 +115,13 @@ function DetailRow({
 }
 
 function ManualEvidenceCard({
+  disputeId,
   initialAdded,
   evidenceItems,
   onAddEvidence,
   isResolved,
 }: {
+  disputeId: string;
   initialAdded: string[];
   evidenceItems: AIEvidenceItem[];
   onAddEvidence: (item: AIEvidenceItem) => void;
@@ -123,6 +132,8 @@ function ManualEvidenceCard({
   const [modalFor, setModalFor] = useState<string | null>(null);
   const [justAdded, setJustAdded] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<EvidenceFileMeta | null>(null);
+  const [inspecting, setInspecting] = useState<InspectableEvidence | null>(null);
+  const { verifyEvidenceItem } = useChatStore();
 
   const itemsByCategory = new Map<string, AIEvidenceItem[]>();
   for (const item of evidenceItems) {
@@ -183,13 +194,50 @@ function ManualEvidenceCard({
                 <ul className="flex flex-col gap-2.5 mt-2.5 pl-11">
                   {items.map((si) => (
                     <li key={si.id}>
-                      <div className="text-[12.5px] font-medium text-[#1a1a1a]">{si.title}</div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <div className="text-[12.5px] font-medium text-[#1a1a1a]">{si.title}</div>
+                        {si.addedBy === "ai" &&
+                          (si.verifiedByHuman ? (
+                            <Badge variant="success">Human verified</Badge>
+                          ) : (
+                            <Badge variant="info">AI found</Badge>
+                          ))}
+                      </div>
                       {si.record && <div className="text-[12px] leading-[17px] text-[#6b7280] mt-0.5">{si.record}</div>}
                       {si.files.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 mt-1.5">
                           {si.files.map((f, i) => (
                             <AttachmentChip key={`${si.id}-${i}`} file={f} onPreview={setPreviewFile} />
                           ))}
+                        </div>
+                      )}
+                      {si.addedBy === "ai" && (
+                        <div className="flex items-center gap-3 mt-1.5">
+                          <button
+                            type="button"
+                            className="text-[12px] font-medium text-[var(--color-agent-accent)] cursor-pointer"
+                            onClick={() =>
+                              setInspecting({
+                                title: si.title,
+                                category: si.category,
+                                why: si.why,
+                                record: si.record,
+                                sourceLabel: si.sourceLabel,
+                                sourceId: sourceIdFromLabel(si.sourceLabel),
+                              })
+                            }
+                          >
+                            Inspect
+                          </button>
+                          {!si.verifiedByHuman && !isResolved && (
+                            <button
+                              type="button"
+                              className="text-[12px] font-medium text-[#6b7280] hover:text-[#1a1a1a] cursor-pointer"
+                              onClick={() => verifyEvidenceItem(disputeId, si.id)}
+                            >
+                              Mark as verified
+                            </button>
+                          )}
                         </div>
                       )}
                     </li>
@@ -205,6 +253,7 @@ function ManualEvidenceCard({
         <AddEvidenceModal category={modalFor} onClose={() => setModalFor(null)} onAdd={handleAdd} />
       )}
       {previewFile && <AttachmentPreviewOverlay file={previewFile} onClose={() => setPreviewFile(null)} />}
+      {inspecting && <EvidenceInspectorModal evidence={inspecting} onClose={() => setInspecting(null)} />}
     </div>
   );
 }
@@ -288,6 +337,7 @@ export function DisputeDetail({
         {/* left column */}
         <div className="flex flex-col gap-5 flex-[2] min-w-0">
           <ManualEvidenceCard
+            disputeId={disputeId}
             initialAdded={dispute.initialEvidenceAdded}
             evidenceItems={evidenceItems}
             onAddEvidence={onAddEvidence}

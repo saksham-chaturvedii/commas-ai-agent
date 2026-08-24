@@ -59,7 +59,9 @@ describe("HTTP API", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.error).toBeUndefined();
-    expect(body.toolSummary).toEqual([{ sourceId: "commas", label: "Customer records", ok: true }]);
+    expect(body.toolSummary).toEqual([
+      { sourceId: "commas", label: "Customer records", ok: true, resultLabel: "Found matching customer records" },
+    ]);
     expect(body.answer).toContain("Sarah Johnson");
   });
 

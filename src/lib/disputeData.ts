@@ -344,6 +344,12 @@ export type AIEvidenceItem = {
    * lets the Resolution Center group/display session-added items per row without a redesign. */
   category: string;
   files: EvidenceFileMeta[];
+  /** True only once a human has explicitly clicked "Mark as verified" on this specific item
+   * (DisputeDetail.tsx) — never set automatically, and never implied just because the seller
+   * approved adding it to the case (approving is "use this," not "I've checked it's accurate").
+   * Undefined/false render identically ("AI found" — unverified); only `addedBy === "ai"` items
+   * show either badge at all, since a seller-uploaded item was never an AI claim to verify. */
+  verifiedByHuman?: boolean;
 };
 
 export const evidenceCategories = [

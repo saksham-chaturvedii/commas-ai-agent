@@ -1,5 +1,5 @@
 import type { LlmClient, LlmStepInput, LlmStepResult, ToolCallRecord } from "./types.js";
-import type { ConversationTurn } from "../types.js";
+import type { ConversationTurn, EvidenceFinding, InvestigationReport, SourceId } from "../types.js";
 
 /**
  * Deterministic stand-in for a real LLM, used whenever ANTHROPIC_API_KEY isn't configured
@@ -455,105 +455,56 @@ export class StubLlmClient implements LlmClient {
     }
 
     const dispute = (disputeResult.data as { dispute: DisputeShape }).dispute;
-    const customerFirstName = dispute.customerName.split(" ")[0];
     const reasonCode = reasonCodeHint ?? dispute.reason;
 
-    const sections: string[] = [
-      "### Situation summary",
-      `Dispute #${dispute.id} — ${money(dispute.amountCents)}, "${dispute.reason.replace(/_/g, " ")}", opened ${fmtDate(dispute.openedAt)}, evidence due ${fmtDate(dispute.evidenceDueAt)}.`,
-      "",
-      "### What I found",
-    ];
+    const evidenceFound = buildEvidenceFound(toolHistory);
 
-    const findings: string[] = [];
-    const crm = get("crm_get_contact");
-    if (crm?.ok) {
-      const contact = (crm.data as { contact: { name: string; status: string; notes: string } | null }).contact;
-      findings.push(
-        contact
-          ? `- **GoHighLevel**: ${contact.name} — ${contact.status.replace(/_/g, " ")}. ${contact.notes}`
-          : `- **GoHighLevel**: no contact record for ${dispute.customerEmail}.`,
-      );
-    }
-    const gmail = get("gmail_search_threads");
-    if (gmail?.ok) {
-      const threads = (gmail.data as { threads: { subject: string; messages: unknown[] }[] }).threads ?? [];
-      findings.push(
-        threads.length > 0
-          ? `- **Gmail**: "${threads[0].subject}" — ${customerFirstName} confirmed access in writing after a support reply.`
-          : `- **Gmail**: no email threads found with ${dispute.customerEmail}.`,
-      );
-    }
-    const fathom = get("fathom_search_calls");
-    if (fathom?.ok) {
-      const calls = (fathom.data as { calls: { durationMinutes: number }[] }).calls ?? [];
-      findings.push(
-        calls.length > 0
-          ? `- **Fathom**: ${calls.length} recorded call${calls.length === 1 ? "" : "s"}, including a ${calls[0].durationMinutes}-minute onboarding session.`
-          : `- **Fathom**: no recorded calls with ${customerFirstName}.`,
-      );
-    }
-    const zoom = get("zoom_list_meetings");
-    if (zoom?.ok) {
-      const meetings = (zoom.data as { meetings: unknown[] }).meetings ?? [];
-      findings.push(
-        meetings.length > 0
-          ? `- **Zoom**: ${meetings.length} meeting${meetings.length === 1 ? "" : "s"} with matching join times, corroborating the Fathom calls.`
-          : `- **Zoom**: no meetings attended by ${customerFirstName}.`,
-      );
-    }
-    const calendar = get("calendar_list_events");
-    if (calendar?.ok) {
-      const events = (calendar.data as { events: { title: string; durationMinutes: number }[] }).events ?? [];
-      findings.push(
-        events.length > 0
-          ? `- **Google Calendar**: ${events.length} scheduled event${events.length === 1 ? "" : "s"}, including "${events[0].title}" booked for ${events[0].durationMinutes} minutes.`
-          : `- **Google Calendar**: no scheduled events for ${customerFirstName}.`,
-      );
-    }
-    sections.push(...(findings.length > 0 ? findings : ["- Only Commas was checked — no external sources are enabled for this chat."]));
-
-    sections.push("", "### My read");
-    sections.push(dispute.likelyReason);
-
-    sections.push("", "### Recommendation");
-    if (dispute.scenario === "resolved") {
-      sections.push(dispute.resolutionOutcome ?? dispute.recommendedAction);
-    } else if (dispute.scenario === "high_risk") {
-      sections.push(`${dispute.uncertaintyNote} ${dispute.recommendedAction}`);
-    } else {
-      sections.push(dispute.recommendedAction);
-    }
-
-    // Two distinct reasons a source might be absent from "What I found" above — never
-    // conflated, so the answer never implies a deliberately-skipped source was unavailable
-    // (or vice versa):
-    //   - not enabled for this chat at all (the pre-existing case)
-    //   - enabled, but simply not a priority source for this dispute's reason code, so the
-    //     chain never called it (see REASON_SOURCE_PRIORITY)
+    // Two distinct reasons a source might be absent — never conflated, so the report never
+    // implies a deliberately-skipped source was unavailable (or vice versa): not enabled for
+    // this chat at all, vs. enabled but simply not a priority source for this dispute's reason
+    // code (REASON_SOURCE_PRIORITY), so the chain never called it.
     const priority = new Set(sourcePriorityFor(reasonCode));
     const checked = new Set(toolHistory.map((t) => t.toolName));
     const notEnabled = ALL_INVESTIGATION_TOOLS.filter((name) => !availableToolNames.includes(name));
     const notPrioritized = ALL_INVESTIGATION_TOOLS.filter(
       (name) => availableToolNames.includes(name) && !priority.has(name) && !checked.has(name),
     );
-
-    const missingLines: string[] = [];
+    const missingInformation: string[] = [];
     if (notEnabled.length > 0) {
       const labels = notEnabled.map((n) => SOURCE_TOOL_NAMES[n]).filter(Boolean);
-      missingLines.push(`- ${labels.join(", ")} — not enabled for this chat. Turn on in the sources menu for a fuller picture.`);
+      missingInformation.push(`${labels.join(", ")} — not enabled for this chat. Turn on in the sources menu for a fuller picture.`);
     }
     if (notPrioritized.length > 0) {
       const labels = notPrioritized.map((n) => SOURCE_TOOL_NAMES[n]).filter(Boolean);
-      missingLines.push(
-        `- ${labels.join(", ")} — available but not checked; lower priority for a "${reasonCode.replace(/_/g, " ")}" investigation.`,
-      );
-    }
-    if (missingLines.length > 0) {
-      sections.push("", "### Missing information", ...missingLines);
+      missingInformation.push(`${labels.join(", ")} — available but not checked; lower priority for a "${reasonCode.replace(/_/g, " ")}" investigation.`);
     }
 
-    return { type: "final", text: sections.join("\n") };
+    const recommendedNextAction =
+      dispute.scenario === "resolved"
+        ? (dispute.resolutionOutcome ?? dispute.recommendedAction)
+        : dispute.scenario === "high_risk"
+          ? `${dispute.uncertaintyNote} ${dispute.recommendedAction}`
+          : dispute.recommendedAction;
+
+    const report: InvestigationReport = {
+      disputeId: dispute.id,
+      caseSummary:
+        `Dispute #${dispute.id} — ${money(dispute.amountCents)}, "${dispute.reason.replace(/_/g, " ")}", opened ${fmtDate(dispute.openedAt)}, ` +
+        `evidence due ${fmtDate(dispute.evidenceDueAt)}. ${dispute.likelyReason}`,
+      evidenceFound,
+      missingInformation,
+      potentialContradictions: findContradictions(toolHistory, dispute),
+      recommendedNextAction,
+      caseStrength: caseStrengthFor(dispute),
+    };
+
+    const sourcesChecked = toolHistory.filter((t) => t.toolName !== "commas_get_dispute" && t.toolName !== "propose_add_evidence").length;
+    const leadIn =
+      sourcesChecked > 0
+        ? `I investigated dispute #${dispute.id} across ${sourcesChecked} connected source${sourcesChecked === 1 ? "" : "s"} — here's the case report.`
+        : `I investigated dispute #${dispute.id} — here's the case report.`;
+
+    return { type: "final", text: leadIn, investigationReport: report };
   }
 
   /** Cross-source lookup across every enabled external app, with a per-source synthesis at
@@ -877,6 +828,160 @@ interface DisputeShape {
   uncertaintyNote?: string;
   resolutionOutcome?: string;
   communicationsSummary: string;
+}
+
+/** Builds the investigation report's "Evidence found" list straight from what tool results
+ * this turn actually contain — strictly positive findings (a call that happened, a thread that
+ * exists, a contact on file), never an empty-result line (those belong to `missingInformation`
+ * or the per-source ToolSummary, not "found"). `raw` carries the underlying record so the UI's
+ * "Inspect" action can show real source detail, not just this function's own prose. */
+function buildEvidenceFound(toolHistory: ToolCallRecord[]): EvidenceFinding[] {
+  const get = (name: string) => toolHistory.find((t) => t.toolName === name)?.result;
+  const findings: EvidenceFinding[] = [];
+
+  const fathom = get("fathom_search_calls");
+  if (fathom?.ok) {
+    const calls = (fathom.data as { calls: { id: string; title: string; occurredAt: string; durationMinutes: number; summary: string; transcriptExcerpt: string; recordingUrl: string }[] }).calls ?? [];
+    calls.forEach((call, i) => {
+      findings.push({
+        id: `fathom-${i}`,
+        category: "Access & activity records",
+        title: `Fathom call — ${call.durationMinutes}-minute session`,
+        record: call.summary,
+        why: "Shows direct engagement with the product or service around the time of purchase.",
+        sourceType: "activity",
+        sourceLabel: "Fathom",
+        sourceId: "fathom" as SourceId,
+        raw: call,
+      });
+    });
+  }
+
+  const zoom = get("zoom_list_meetings");
+  if (zoom?.ok) {
+    const meetings = (zoom.data as { meetings: { id: string; topic: string; joinedAt: string; leftAt: string; durationMinutes: number }[] }).meetings ?? [];
+    meetings.forEach((mtg, i) => {
+      findings.push({
+        id: `zoom-${i}`,
+        category: "Access & activity records",
+        title: `Zoom meeting — ${mtg.durationMinutes} minute${mtg.durationMinutes === 1 ? "" : "s"} attended`,
+        record: `"${mtg.topic}" — joined ${fmtDate(mtg.joinedAt)}, left after ${mtg.durationMinutes} minutes.`,
+        why: "Independently corroborates call attendance and duration alongside Fathom.",
+        sourceType: "activity",
+        sourceLabel: "Zoom",
+        sourceId: "zoom" as SourceId,
+        raw: mtg,
+      });
+    });
+  }
+
+  const calendar = get("calendar_list_events");
+  if (calendar?.ok) {
+    const events = (calendar.data as { events: { id: string; title: string; startAt: string; durationMinutes: number; status: string }[] }).events ?? [];
+    events.forEach((evt, i) => {
+      findings.push({
+        id: `calendar-${i}`,
+        category: "Access & activity records",
+        title: `Calendar event — "${evt.title}"`,
+        record: `Booked for ${evt.durationMinutes} minutes on ${fmtDate(evt.startAt)} (${evt.status.replace(/_/g, " ")}).`,
+        why: "Shows what was actually scheduled, for comparison against what happened on the call.",
+        sourceType: "activity",
+        sourceLabel: "Google Calendar",
+        sourceId: "google-calendar" as SourceId,
+        raw: evt,
+      });
+    });
+  }
+
+  const gmail = get("gmail_search_threads");
+  if (gmail?.ok) {
+    const threads = (gmail.data as { threads: { id: string; subject: string; category: string; messages: { from: string; sentAt: string; snippet: string }[] }[] }).threads ?? [];
+    threads.forEach((thread, i) => {
+      findings.push({
+        id: `gmail-${i}`,
+        category: "Customer communications",
+        title: `Email thread — "${thread.subject}"`,
+        record: thread.messages[thread.messages.length - 1]?.snippet ?? "",
+        why: "Direct correspondence relevant to this dispute.",
+        sourceType: "communication",
+        sourceLabel: "Gmail",
+        sourceId: "gmail" as SourceId,
+        raw: thread,
+      });
+    });
+  }
+
+  const crm = get("crm_get_contact");
+  if (crm?.ok) {
+    const contact = (crm.data as { contact: { email: string; name: string; status: string; pipelineStage: string; notes: string; activityLog: { date: string; type: string; detail: string }[] } | null }).contact;
+    if (contact) {
+      findings.push({
+        id: "crm-0",
+        category: "Customer & account information",
+        title: `GoHighLevel contact — ${contact.name}`,
+        record: `${contact.status.replace(/_/g, " ")}, pipeline stage "${contact.pipelineStage}". ${contact.notes}`,
+        why: "Shows account history and engagement level with the business.",
+        sourceType: "activity",
+        sourceLabel: "GoHighLevel",
+        sourceId: "crm" as SourceId,
+        raw: contact,
+      });
+    }
+  }
+
+  return findings;
+}
+
+/** Concrete tensions between sources, or between a source and the customer's claim — never a
+ * fabricated one: each check is grounded in real fields from tool results already gathered this
+ * turn, and the function returns an empty array (never a placeholder) when it finds none. */
+function findContradictions(toolHistory: ToolCallRecord[], dispute: DisputeShape): string[] {
+  const get = (name: string) => toolHistory.find((t) => t.toolName === name)?.result;
+  const contradictions: string[] = [];
+
+  const calendar = get("calendar_list_events");
+  const fathom = get("fathom_search_calls");
+  if (calendar?.ok && fathom?.ok) {
+    const events = (calendar.data as { events: { durationMinutes: number }[] }).events ?? [];
+    const calls = (fathom.data as { calls: { durationMinutes: number }[] }).calls ?? [];
+    if (events.length > 0 && calls.length > 0) {
+      const booked = events[0].durationMinutes;
+      const actual = calls[0].durationMinutes;
+      if (actual < booked) {
+        contradictions.push(
+          `Booked for ${booked} minutes but the call lasted only ${actual} — the session ran short of what was scheduled, which partially supports the customer's complaint even though the session did happen.`,
+        );
+      }
+    }
+  }
+
+  const zoom = get("zoom_list_meetings");
+  const hadEngagement = (fathom?.ok && ((fathom.data as { calls: unknown[] }).calls ?? []).length > 0) || (zoom?.ok && ((zoom.data as { meetings: unknown[] }).meetings ?? []).length > 0);
+  if (dispute.reason === "product_not_received" && hadEngagement) {
+    contradictions.push("Customer claims the product wasn't received, but call/meeting records show direct engagement with it after purchase.");
+  }
+
+  return contradictions;
+}
+
+/** A short, dispute-grounded strength read — never a numeric score, which would imply more
+ * precision than this prototype's data supports. `explanation` always reuses the dispute's own
+ * authored reasoning (never invents new analysis), same discipline as the rest of this file. */
+function caseStrengthFor(dispute: DisputeShape): { label: string; explanation: string } {
+  switch (dispute.scenario) {
+    case "resolved":
+      return { label: "Resolved", explanation: dispute.resolutionOutcome ?? dispute.recommendedAction };
+    case "high_risk":
+      return { label: "Weak", explanation: `${dispute.uncertaintyNote ?? ""} ${dispute.recommendedAction}`.trim() };
+    case "missing_evidence":
+      return { label: "Weak", explanation: dispute.recommendedAction };
+    case "evidence_ready":
+      return { label: "Strong", explanation: dispute.recommendedAction };
+    default:
+      return dispute.evidenceMissing.length === 0
+        ? { label: "Strong", explanation: dispute.recommendedAction }
+        : { label: "Moderate", explanation: dispute.recommendedAction };
+  }
 }
 
 function isFollowupPhrase(p: string) {

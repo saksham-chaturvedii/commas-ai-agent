@@ -146,8 +146,10 @@ describe("propose-tools wired into runAgentTurn (ACTIVE dispute)", () => {
     // At least one candidate cites the real Fathom call (42-minute onboarding session, per the
     // dispute's authored mock data) — grounded in an actual tool result, not invented.
     expect(proposal.items.some((i) => i.sourceLabel === "Fathom" && i.record.includes("42-minute"))).toBe(true);
-    // The investigation's own final answer still renders normally alongside the proposal.
-    expect(result.answer).toContain("Situation summary");
+    // The investigation's own structured report still renders normally alongside the proposal.
+    expect(result.investigationReport).toBeDefined();
+    expect(result.investigationReport?.disputeId).toBe("2481");
+    expect(result.answer.length).toBeGreaterThan(0);
   });
 
   it("'draft a response' on an active dispute proposes a draft instead of dropping the full text into the chat", async () => {

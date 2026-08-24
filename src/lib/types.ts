@@ -35,6 +35,10 @@ export interface ProgressStep {
   label: string;
   /** Only used for write-classified steps that render an approval card. */
   approvalSummary?: string;
+  /** Result-aware, past-tense label shown once this step completes (e.g. "Found completed
+   * coaching calls") — real, tool-grounded, never a static rephrasing of `label`. Falls back to
+   * `label` when absent. */
+  doneLabel?: string;
 }
 
 export type RunPhase = "idle" | "running" | "awaiting_approval" | "done" | "cancelled";
@@ -43,6 +47,8 @@ export interface ToolSummaryItem {
   sourceId: SourceId;
   label: string;
   ok: boolean;
+  /** Same result-aware label as `ProgressStep.doneLabel`. */
+  resultLabel?: string;
 }
 
 export interface ChatMessage {
@@ -64,6 +70,9 @@ export interface ChatMessage {
    * only, the moment the seller clicks approve/decline (useChatStore's `resolveProposedAction`)
    * — never round-tripped back to the server, unlike the write-tool `pendingApproval` flow. */
   proposedActions?: ProposedAction[];
+  /** Set only by a full multi-source dispute investigation — rendered by
+   * `InvestigationReportCard.tsx` in place of parsing `text`'s prose. */
+  investigationReport?: InvestigationReport;
 }
 
 export type ProposedActionStatus = "pending" | "approved" | "declined";
@@ -98,6 +107,41 @@ export type ProposedAction =
       approvedCount?: number;
     }
   | { id: string; type: "draft_response"; disputeId: string; summary: string; draftText: string; status: ProposedActionStatus };
+
+/** One concrete fact the investigation found, grounded in a real tool result this turn —
+ * read-only/informational (rendered in `InvestigationReportCard`'s "Evidence found" section).
+ * Distinct from `ProposedEvidenceCandidate` above, which is a candidate for the evidence
+ * checklist and goes through the existing propose/approve pipeline. `raw` is the underlying
+ * source record (a Fathom call, a Gmail thread, …), letting "Inspect" show the real source
+ * detail instead of only repeating `record`'s prose. */
+export interface EvidenceFinding {
+  id: string;
+  category: string;
+  title: string;
+  record: string;
+  why: string;
+  sourceType: string;
+  sourceLabel: string;
+  sourceId: SourceId;
+  raw?: Record<string, unknown>;
+}
+
+/** The structured result of a full multi-source dispute investigation — every field is derived
+ * from tool results actually returned this turn, or the dispute's own authored facts, never
+ * fabricated. */
+export interface InvestigationReport {
+  disputeId: string;
+  caseSummary: string;
+  evidenceFound: EvidenceFinding[];
+  /** Empty when nothing is missing. */
+  missingInformation: string[];
+  /** Empty (never a fabricated one) when the investigation found none. */
+  potentialContradictions: string[];
+  recommendedNextAction: string;
+  /** `label` is a short, dispute-grounded strength read (e.g. "Strong", "Weak") — never a
+   * numeric score. `explanation` is always the dispute's own authored reasoning. */
+  caseStrength: { label: string; explanation: string };
+}
 
 /** Structured dispute facts, attached to dispute-context chats so the agent has them without
  * a tool call or the user copy/pasting anything (PROTOTYPE_SPEC.md §2.11). */

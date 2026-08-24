@@ -1,5 +1,5 @@
 import type { SourceAdapter } from "../adapters/types.js";
-import type { RegisteredTool } from "./registry.js";
+import { resultLabelFor, type RegisteredTool } from "./registry.js";
 import type { LlmClient, LlmToolDef, ToolCallRecord } from "../llm/types.js";
 import { AgentError, classifyError } from "./errors.js";
 import { agentContextFromPageContext } from "./context/model.js";
@@ -155,7 +155,10 @@ async function runLoop(state: LoopState): Promise<AgentRunResponse> {
       const step = await llmClient.nextStep({ systemPrompt, userPrompt: prompt, context, availableTools, conversationHistory, toolHistory });
 
       if (step.type === "final") {
-        return withProposedActions({ steps, answer: step.text, toolSummary }, proposedActions);
+        return withProposedActions(
+          { steps, answer: step.text, toolSummary, ...(step.investigationReport ? { investigationReport: step.investigationReport } : {}) },
+          proposedActions,
+        );
       }
 
       // Propose-tools (server/agent/actions/index.ts) never touch a source and never pause for
@@ -169,6 +172,19 @@ async function runLoop(state: LoopState): Promise<AgentRunResponse> {
         const proposed = disputeId ? buildProposedAction(disputeId, step.toolName, step.input) : undefined;
         if (proposed) {
           proposedActions.push(proposed);
+          // Visible progress step for the proposal itself — previously silent, which meant the
+          // investigation's own evidence cross-referencing never showed up in the checklist the
+          // seller watches while it runs.
+          if (step.toolName === "propose_add_evidence") {
+            steps.push({
+              id: `commas-${step.toolName}-${i}`,
+              sourceId: "commas",
+              classification: "read",
+              label: "Cross-referencing evidence…",
+              doneLabel: "Cross-referenced evidence",
+            });
+            toolSummary.push({ sourceId: "commas", label: "Evidence cross-reference", ok: true, resultLabel: "Cross-referenced evidence" });
+          }
           toolHistory.push({
             toolCallId: step.toolCallId,
             toolName: step.toolName,
@@ -222,8 +238,9 @@ async function runLoop(state: LoopState): Promise<AgentRunResponse> {
         resultData = classifyError(err).message;
       }
 
-      steps.push({ id: `${sourceId}-${step.toolName}-${i}`, sourceId, classification, label });
-      toolSummary.push({ sourceId, label: registered?.displayName ?? step.toolName, ok });
+      const doneLabel = resultLabelFor(step.toolName, ok, resultData);
+      steps.push({ id: `${sourceId}-${step.toolName}-${i}`, sourceId, classification, label, doneLabel });
+      toolSummary.push({ sourceId, label: registered?.displayName ?? step.toolName, ok, resultLabel: doneLabel });
       toolHistory.push({ toolCallId: step.toolCallId, toolName: step.toolName, input: step.input, result: { ok, data: resultData } });
     }
 

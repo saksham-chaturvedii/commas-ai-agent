@@ -34,7 +34,11 @@ export function ChatMessageList({ chat }: { chat: Chat }) {
         {isRunningHere && !isStreamingWithContent && (
           <div className="flex justify-start">
             <div className="chat-bubble-agent">
-              <ProgressBlock steps={runSteps} visibleStepIds={visibleStepIds} />
+              <ProgressBlock
+                steps={runSteps}
+                visibleStepIds={visibleStepIds}
+                title={chat.context?.kind === "dispute" ? `Investigating dispute #${chat.context.id}` : undefined}
+              />
             </div>
           </div>
         )}

@@ -171,6 +171,9 @@ interface ChatStoreValue {
    * about a dispute's visible evidence lives anywhere else. */
   evidenceByDispute: Record<string, AIEvidenceItem[]>;
   addEvidenceItem: (disputeId: string, item: AIEvidenceItem) => void;
+  /** Marks one AI-found evidence item as human-verified — the only setter for
+   * `AIEvidenceItem.verifiedByHuman`, called only from an explicit "Mark as verified" click. */
+  verifyEvidenceItem: (disputeId: string, itemId: string) => void;
   /** The seller's editable response draft per dispute — previously local, ephemeral state
    * inside DisputeDetail; lifted here so the chat's `propose_draft_response` approval flow can
    * set it too, and so it survives navigating away from and back to the dispute detail page. */
@@ -375,6 +378,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
           ts: new Date().toISOString(),
           toolSummary: plan.toolSummary.length > 0 ? plan.toolSummary : undefined,
           proposedActions: plan.proposedActions && plan.proposedActions.length > 0 ? plan.proposedActions : undefined,
+          investigationReport: plan.investigationReport,
         };
         setChats((prev) =>
           prev.map((c) =>
@@ -653,6 +657,17 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     setEvidenceByDispute((prev) => ({ ...prev, [disputeId]: [...(prev[disputeId] ?? []), item] }));
   }, []);
 
+  /** The ONLY place `verifiedByHuman` is ever set to true — a deliberate, explicit click on the
+   * evidence checklist itself (DisputeDetail.tsx), never a side effect of approving a proposal
+   * or anything else automatic. "Do not claim evidence is verified by the human unless the
+   * human has actually reviewed it." */
+  const verifyEvidenceItem = useCallback((disputeId: string, itemId: string) => {
+    setEvidenceByDispute((prev) => ({
+      ...prev,
+      [disputeId]: (prev[disputeId] ?? []).map((item) => (item.id === itemId ? { ...item, verifiedByHuman: true } : item)),
+    }));
+  }, []);
+
   const setResponseDraft = useCallback((disputeId: string, text: string) => {
     setResponseDraftByDispute((prev) => ({ ...prev, [disputeId]: text }));
   }, []);
@@ -696,6 +711,10 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
               addedBy: "ai",
               category: candidate.category,
               files: [],
+              // Approving a proposal means "use this," not "I've checked it's accurate" — never
+              // implicitly verified. Only an explicit "Mark as verified" click (verifyEvidenceItem)
+              // sets this.
+              verifiedByHuman: false,
             });
           }
         } else if (action.type === "draft_response") {
@@ -805,6 +824,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       markedReadyDisputeIds,
       evidenceByDispute,
       addEvidenceItem,
+      verifyEvidenceItem,
       responseDraftByDispute,
       setResponseDraft,
       resolveProposedAction,
@@ -833,6 +853,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       markedReadyDisputeIds,
       evidenceByDispute,
       addEvidenceItem,
+      verifyEvidenceItem,
       responseDraftByDispute,
       setResponseDraft,
       resolveProposedAction,

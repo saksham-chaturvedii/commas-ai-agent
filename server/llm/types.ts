@@ -1,4 +1,4 @@
-import type { ConversationTurn, PageContext } from "../types.js";
+import type { ConversationTurn, InvestigationReport, PageContext } from "../types.js";
 
 /** A tool as the LLM sees it — name/description/JSON-schema input, nothing else. */
 export interface LlmToolDef {
@@ -29,7 +29,7 @@ export interface LlmStepInput {
 
 export type LlmStepResult =
   | { type: "tool_call"; toolCallId: string; toolName: string; input: Record<string, unknown> }
-  | { type: "final"; text: string };
+  | { type: "final"; text: string; investigationReport?: InvestigationReport };
 
 /**
  * The Agent's LLM abstraction. `AnthropicLlmClient` (real) and `StubLlmClient` (deterministic,
