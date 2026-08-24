@@ -1,11 +1,12 @@
 import { AgentError } from "../agent/errors.js";
 import type { LlmClient, LlmStepInput, LlmStepResult, ToolCallRecord } from "./types.js";
 
-// meta-llama/llama-3.3-70b-instruct:free was pulled from the free tier ("This model is
-// unavailable for free... use this slug instead: meta-llama/llama-3.3-70b-instruct", confirmed
-// live) — replaced with a model confirmed, via OpenRouter's own public /api/v1/models listing,
-// to currently be both free and tool-calling-capable.
-const DEFAULT_MODEL = "google/gemma-4-31b-it:free";
+// meta-llama/llama-3.3-70b-instruct:free was pulled from the free tier (confirmed live), and
+// google/gemma-4-31b-it:free routes through Google AI Studio's own congested shared free pool
+// (confirmed live via a 429 "temporarily rate-limited upstream") — this one is Nvidia-hosted,
+// a different provider pool, and confirmed free + tool-calling-capable via OpenRouter's own
+// public /api/v1/models listing.
+const DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 /**

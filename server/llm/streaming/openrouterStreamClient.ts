@@ -6,7 +6,7 @@ import type { StreamStepArgs, StreamStepResult, StreamingLlmClient } from "./typ
 // See server/llm/openrouterClient.ts's comment — the old default was pulled from the free
 // tier; this one is confirmed, via OpenRouter's public /api/v1/models listing, to currently be
 // both free and tool-calling-capable.
-const DEFAULT_MODEL = "google/gemma-4-31b-it:free";
+const DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 /**
