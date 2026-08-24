@@ -1,4 +1,5 @@
 import { AgentError } from "../../agent/errors.js";
+import { sanitizeSchemaForGemini } from "../geminiSchema.js";
 import type { ToolCallRecord } from "../types.js";
 import type { StreamStepArgs, StreamStepResult, StreamingLlmClient } from "./types.js";
 
@@ -36,7 +37,7 @@ export class GeminiStreamClient implements StreamingLlmClient {
           functionDeclarations: availableTools.map((t) => ({
             name: t.name,
             description: t.description,
-            parameters: t.inputSchema,
+            parameters: sanitizeSchemaForGemini(t.inputSchema),
           })),
         },
       ];

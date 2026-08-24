@@ -2,6 +2,7 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { GeminiLlmClient } from "../../server/llm/geminiClient.js";
 import { GeminiStreamClient } from "../../server/llm/streaming/geminiStreamClient.js";
+import { sanitizeSchemaForGemini } from "../../server/llm/geminiSchema.js";
 import { AgentError } from "../../server/agent/errors.js";
 import type { LlmStepInput } from "../../server/llm/types.js";
 import type { StreamStepArgs } from "../../server/llm/streaming/types.js";
@@ -29,6 +30,29 @@ function baseInput(overrides: Partial<LlmStepInput> = {}): LlmStepInput {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("sanitizeSchemaForGemini", () => {
+  it("strips $schema and $id at every depth without touching anything else", () => {
+    const input = {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        nested: { $id: "#nested", type: "object", properties: { id: { type: "string" } } },
+      },
+      required: ["nested"],
+    };
+    expect(sanitizeSchemaForGemini(input)).toEqual({
+      type: "object",
+      properties: { nested: { type: "object", properties: { id: { type: "string" } } } },
+      required: ["nested"],
+    });
+  });
+
+  it("passes through primitives and arrays unchanged", () => {
+    expect(sanitizeSchemaForGemini("x")).toBe("x");
+    expect(sanitizeSchemaForGemini([{ $schema: "y", a: 1 }])).toEqual([{ a: 1 }]);
+  });
 });
 
 describe("GeminiLlmClient", () => {
@@ -78,7 +102,17 @@ describe("GeminiLlmClient", () => {
 
     const client = new GeminiLlmClient("test-key");
     const result = await client.nextStep(
-      baseInput({ availableTools: [{ name: "commas_get_dispute", description: "look up a dispute", inputSchema: { type: "object" } }] }),
+      baseInput({
+        availableTools: [
+          {
+            name: "commas_get_dispute",
+            description: "look up a dispute",
+            // Mirrors the real tool registry's shape (server/agent/registry.ts): every schema
+            // carries a top-level $schema key from zod-to-json-schema.
+            inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], $schema: "http://json-schema.org/draft-07/schema#" },
+          },
+        ],
+      }),
     );
 
     expect(result.type).toBe("tool_call");
@@ -90,6 +124,14 @@ describe("GeminiLlmClient", () => {
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.tools[0].functionDeclarations[0].name).toBe("commas_get_dispute");
+    // Gemini's API rejects $schema outright (confirmed live: 400 INVALID_ARGUMENT, "Unknown
+    // name \"$schema\"") — it must never reach the wire.
+    expect(body.tools[0].functionDeclarations[0].parameters).not.toHaveProperty("$schema");
+    expect(body.tools[0].functionDeclarations[0].parameters).toEqual({
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+    });
   });
 
   it("includes prior tool calls as model/user turn pairs (functionCall + functionResponse)", async () => {

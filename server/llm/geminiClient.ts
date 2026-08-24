@@ -1,4 +1,5 @@
 import { AgentError } from "../agent/errors.js";
+import { sanitizeSchemaForGemini } from "./geminiSchema.js";
 import type { LlmClient, LlmStepInput, LlmStepResult, ToolCallRecord } from "./types.js";
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
@@ -44,7 +45,7 @@ export class GeminiLlmClient implements LlmClient {
           functionDeclarations: availableTools.map((t) => ({
             name: t.name,
             description: t.description,
-            parameters: t.inputSchema,
+            parameters: sanitizeSchemaForGemini(t.inputSchema),
           })),
         },
       ];
