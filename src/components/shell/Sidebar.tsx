@@ -66,9 +66,11 @@ export function Sidebar({ active, onNavigate }: { active: ViewId; onNavigate: (v
     <div className="flex relative shrink-0 h-full pb-4 w-12">
       <div className="flex flex-col items-center gap-1 px-1 pb-2.5 h-full w-full">
         {/* logo tile */}
-        <div className="flex items-center justify-center w-10 h-10 rounded-[14px] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.05),0_4px_10px_rgba(16,24,40,0.08)] mb-4">
-          <CommaMark size={24} />
-        </div>
+        <img
+          src="/commasdefault.png"
+          alt="Commas"
+          className="w-10 h-10 rounded-[14px] shadow-[0_1px_2px_rgba(0,0,0,0.05),0_4px_10px_rgba(16,24,40,0.08)] mb-4"
+        />
 
         {/* primary nav */}
         <nav className="flex flex-col items-center gap-1">
