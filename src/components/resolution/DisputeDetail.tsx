@@ -185,7 +185,7 @@ function ManualEvidenceCard({
                     style={{ height: 29 }}
                     onClick={() => setModalFor(item.label)}
                   >
-                    {isAdded ? "Add another" : "Add"}
+                    Add evidence
                   </button>
                 )}
               </div>
@@ -275,6 +275,7 @@ export function DisputeDetail({
   onInvestigate: () => void;
 }) {
   const [justSaved, setJustSaved] = useState(false);
+  const [justSubmitted, setJustSubmitted] = useState(false);
   const { markedReadyDisputeIds, responseDraftByDispute, setResponseDraft } = useChatStore();
   const markedReadyByAI = markedReadyDisputeIds.includes(disputeId);
   // Lifted to useChatStore (docs/AI_ASSISTANT_ARCHITECTURE.md §7) so the chat's
@@ -291,6 +292,13 @@ export function DisputeDetail({
   const saveDraft = () => {
     setJustSaved(true);
     setTimeout(() => setJustSaved(false), 2000);
+  };
+
+  const canSubmit = evidenceItems.length > 0;
+  const submitResponse = () => {
+    if (!canSubmit) return;
+    setJustSubmitted(true);
+    setTimeout(() => setJustSubmitted(false), 2000);
   };
 
   if (!dispute) return null;
@@ -387,16 +395,23 @@ export function DisputeDetail({
                     Draft saved
                   </span>
                 )}
+                {justSubmitted && (
+                  <span className="inline-flex items-center gap-1 text-[12px] leading-[17px] text-[#4e9b11] font-medium">
+                    <Check size={13} strokeWidth={2.5} />
+                    Response submitted
+                  </span>
+                )}
                 <div className="flex-1" />
                 <button type="button" className="btn-secondary" style={{ height: 40 }} onClick={saveDraft}>
                   Save draft
                 </button>
                 <button
                   type="button"
-                  disabled
+                  disabled={!canSubmit}
                   className="btn-dark"
-                  style={{ height: 40, opacity: 0.4, cursor: "not-allowed" }}
-                  title="Submission is simulated in this prototype"
+                  style={!canSubmit ? { height: 40, opacity: 0.4, cursor: "not-allowed" } : { height: 40 }}
+                  onClick={submitResponse}
+                  title={canSubmit ? "Submission is simulated in this prototype" : "Add at least one piece of evidence before submitting"}
                 >
                   Submit response
                 </button>

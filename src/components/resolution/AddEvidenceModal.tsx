@@ -34,7 +34,7 @@ export function AddEvidenceModal({
 }) {
   const [step, setStep] = useState<"form" | "review">("form");
   const [type, setType] = useState<(typeof EVIDENCE_TYPES)[number]["value"]>("communication");
-  const [title, setTitle] = useState("");
+  const [title, setTitle] = useState<string>(EVIDENCE_TYPES[0].label);
   const [description, setDescription] = useState("");
   const { files, notice, addFiles, removeFile, retryFile, allReady } = useEvidenceFiles();
   const cardRef = useRef<HTMLDivElement>(null);
@@ -108,7 +108,12 @@ export function AddEvidenceModal({
                   <button
                     key={t.value}
                     type="button"
-                    onClick={() => setType(t.value)}
+                    onClick={() => {
+                      setType(t.value);
+                      // Every type but "Other" has one fixed, well-defined title — only "Other"
+                      // is free text, since there's nothing to derive a title from otherwise.
+                      setTitle(t.value === "other" ? "" : t.label);
+                    }}
                     className="inline-flex items-center h-8 px-3 rounded-full text-[13px] font-medium cursor-pointer transition-colors"
                     style={
                       type === t.value
@@ -124,12 +129,18 @@ export function AddEvidenceModal({
 
             <div>
               <label className="block text-[13px] text-[#404040] mb-1.5 pl-1">Title</label>
-              <div className="textarea-shell" style={{ borderRadius: 12 }}>
+              <div className="textarea-shell" style={{ borderRadius: 12, opacity: type === "other" ? 1 : 0.7 }}>
                 <input
                   type="text"
                   value={title}
-                  onChange={(e) => setTitle(e.target.value)}
+                  onChange={(e) => {
+                    // The `readOnly` attribute below only blocks real keyboard/paste input —
+                    // it doesn't stop a programmatic value change from firing this handler, so
+                    // this guard is the actual enforcement, not just the HTML attribute.
+                    if (type === "other") setTitle(e.target.value);
+                  }}
                   placeholder={typeMeta.placeholder}
+                  readOnly={type !== "other"}
                   className="w-full"
                   style={{
                     padding: "10px 14px",
@@ -140,6 +151,7 @@ export function AddEvidenceModal({
                     fontSize: 14,
                     color: "#1a1a1a",
                     borderRadius: "10.5px",
+                    cursor: type === "other" ? "text" : "default",
                   }}
                 />
               </div>

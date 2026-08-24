@@ -121,7 +121,10 @@ describe("Add evidence — file upload", () => {
     const onClose = vi.fn();
     render(<AddEvidenceModal category="Customer communications" onClose={onClose} onAdd={onAdd} />);
 
-    fireEvent.change(screen.getByPlaceholderText("Support email thread"), { target: { value: "Support email thread" } });
+    // "Other" is the only evidence type with a free-text title — every other type has a fixed,
+    // non-editable title derived from the type itself (audit follow-up: seller feedback).
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
+    fireEvent.change(screen.getByPlaceholderText("Description of evidence"), { target: { value: "Support email thread" } });
     fireEvent.change(screen.getByPlaceholderText("Describe what this evidence shows..."), {
       target: { value: "Customer confirmed delivery." },
     });
@@ -149,7 +152,8 @@ describe("Add evidence — file upload", () => {
     vi.useFakeTimers();
     render(<AddEvidenceModal category="Customer communications" onClose={vi.fn()} onAdd={vi.fn()} />);
 
-    fireEvent.change(screen.getByPlaceholderText("Support email thread"), { target: { value: "My title" } });
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
+    fireEvent.change(screen.getByPlaceholderText("Description of evidence"), { target: { value: "My title" } });
     act(() => selectFiles([makeFile("email.pdf", 1024)]));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1200);
@@ -159,7 +163,30 @@ describe("Add evidence — file upload", () => {
 
     fireEvent.click(screen.getByText("Back"));
     expect(screen.queryByText("Review evidence")).not.toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Support email thread")).toHaveValue("My title");
+    expect(screen.getByPlaceholderText("Description of evidence")).toHaveValue("My title");
     expect(screen.getByText("email.pdf")).toBeInTheDocument();
+  });
+
+  it("every evidence type but 'Other' has a fixed, non-editable title derived from the type", () => {
+    render(<AddEvidenceModal category="Customer communications" onClose={vi.fn()} onAdd={vi.fn()} />);
+
+    // Default type (Customer communication) — title is pre-filled and read-only.
+    const titleInput = screen.getByPlaceholderText("Support email thread") as HTMLInputElement;
+    expect(titleInput).toHaveValue("Customer communication");
+    expect(titleInput).toHaveAttribute("readonly");
+    fireEvent.change(titleInput, { target: { value: "attempted edit" } });
+    expect(titleInput).toHaveValue("Customer communication"); // readOnly ignores the change event
+
+    // Switching type re-fills the fixed title.
+    fireEvent.click(screen.getByRole("button", { name: "Invoice" }));
+    expect(screen.getByPlaceholderText("Invoice or receipt copy")).toHaveValue("Invoice");
+
+    // Only "Other" allows free text.
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
+    const otherInput = screen.getByPlaceholderText("Description of evidence") as HTMLInputElement;
+    expect(otherInput).toHaveValue("");
+    expect(otherInput).not.toHaveAttribute("readonly");
+    fireEvent.change(otherInput, { target: { value: "Custom evidence title" } });
+    expect(otherInput).toHaveValue("Custom evidence title");
   });
 });

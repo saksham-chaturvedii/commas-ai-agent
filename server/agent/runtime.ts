@@ -344,7 +344,11 @@ function buildSystemPrompt(context?: PageContext): string {
     "disputes in Commas, and by checking their connected apps (Google Calendar, Zoom, Fathom, " +
     "Gmail, GoHighLevel) when useful. Decide for yourself which tools you need and in what " +
     "order — don't assume a fixed sequence, and never state a fact about their data that didn't " +
-    "come from a tool result.\n\n";
+    "come from a tool result. When a write action (one that changes something, not just looks " +
+    "something up) is available and the seller has clearly asked for it, call that tool " +
+    "directly — don't ask them to confirm in the chat text first. The product already pauses " +
+    "and shows the seller an approve/decline card before any write action actually runs, so " +
+    "asking again in text is redundant and blocks that flow.\n\n";
   return toolsPrefix + buildContextPrompt(agentContextFromPageContext(context?.id ?? "no-context", context));
 }
 

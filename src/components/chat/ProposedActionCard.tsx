@@ -112,14 +112,14 @@ export function ProposedActionCard({ action, chatId, messageId }: { action: Prop
       )}
 
       <div className="flex items-center gap-2">
-        <button type="button" className="btn-secondary flex-1" style={{ height: 36 }} onClick={decline}>
+        <button type="button" className="btn-secondary flex-1 whitespace-nowrap" style={{ minHeight: 36 }} onClick={decline}>
           <X size={14} strokeWidth={2} />
           Dismiss
         </button>
         <button
           type="button"
-          className="btn-dark flex-1"
-          style={{ height: 36 }}
+          className="btn-dark flex-[1.4] whitespace-nowrap"
+          style={{ minHeight: 36 }}
           onClick={approve}
           disabled={action.type === "add_evidence" && selected.size === 0}
         >
