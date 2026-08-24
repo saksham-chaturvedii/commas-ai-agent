@@ -32,8 +32,11 @@ export default function middleware(request: Request): Response | undefined {
     if (suppliedPassword === password) return undefined;
   }
 
+  // HTTP header values must be ASCII (confirmed live via vercel logs: an em dash here made
+  // every unauthenticated request fail with "Invalid header name or value" instead of
+  // prompting for a password) — keep the realm plain ASCII.
   return new Response("Authentication required.", {
     status: 401,
-    headers: { "WWW-Authenticate": 'Basic realm="Commas AI Agent — private demo", charset="UTF-8"' },
+    headers: { "WWW-Authenticate": 'Basic realm="Commas AI Agent - private demo"' },
   });
 }
