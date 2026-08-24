@@ -226,6 +226,8 @@ export async function createApp() {
         },
         llmClient: streamingLlmClient,
         sessionStore,
+        adapters,
+        registry,
         signal: c.req.raw.signal,
         onEvent: async (event) => {
           if (event.type === "delta") {

@@ -1,19 +1,19 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { StreamReplyArgs, StreamingLlmClient } from "./types.js";
+import { AgentError } from "../../agent/errors.js";
+import type { StreamStepArgs, StreamStepResult, StreamingLlmClient } from "./types.js";
 
 const DEFAULT_MODEL = "claude-opus-5";
 
 /**
  * Real streaming LLM client for the shared agent — only constructed when ANTHROPIC_API_KEY is
- * set (server/app.ts). This is the first component in the pipeline to actually call
- * `@anthropic-ai/sdk`'s streaming API (`client.messages.stream()`); the legacy `AnthropicLlmClient`
- * (server/llm/anthropicClient.ts) uses the non-streaming `messages.create()` and has never been
- * exercised live in any recorded session (docs/AI_ASSISTANT_BASELINE.md §7.3) — this file is
- * deliberately new and separate rather than a rewrite of that one, so the legacy request/response
- * path used by dispute-context chats is untouched.
- *
- * Model is configurable via `AGENT_MODEL` (falls back to `claude-opus-5`) so a faster/cheaper
- * model can be swapped in for live verification without a code change.
+ * set (server/app.ts). Uses `@anthropic-ai/sdk`'s streaming API (`client.messages.stream()`)
+ * with `tools` attached, so a single call can both stream reply text AND signal a tool_use
+ * request — the same request/response shape as the legacy `AnthropicLlmClient.nextStep()`
+ * (server/llm/anthropicClient.ts), just decided over a stream instead of one blocking call. Text
+ * the model produces streams via `onDelta` as it arrives, whether or not this step ultimately
+ * resolves as a tool call — a model that writes a line of preamble before calling a tool (real,
+ * common Anthropic behavior) is expected to have that preamble visible immediately, exactly as a
+ * real assistant UI would show it.
  */
 export class AnthropicStreamClient implements StreamingLlmClient {
   private client: Anthropic;
@@ -24,8 +24,31 @@ export class AnthropicStreamClient implements StreamingLlmClient {
     this.model = model;
   }
 
-  async streamReply({ systemPrompt, transcript, onDelta, signal }: StreamReplyArgs): Promise<void> {
+  async streamStep({ systemPrompt, transcript, availableTools, toolHistory, onDelta, signal }: StreamStepArgs): Promise<StreamStepResult> {
     const messages: Anthropic.MessageParam[] = transcript.map((t) => ({ role: t.role, content: t.text }));
+    for (const record of toolHistory) {
+      messages.push({
+        role: "assistant",
+        content: [{ type: "tool_use", id: record.toolCallId, name: record.toolName, input: record.input }],
+      });
+      messages.push({
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: record.toolCallId,
+            content: JSON.stringify(record.result?.data ?? null),
+            is_error: record.result?.ok === false,
+          },
+        ],
+      });
+    }
+
+    const tools: Anthropic.Tool[] = availableTools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      input_schema: (t.inputSchema as Anthropic.Tool.InputSchema) ?? { type: "object" },
+    }));
 
     const stream = this.client.messages.stream(
       {
@@ -33,6 +56,7 @@ export class AnthropicStreamClient implements StreamingLlmClient {
         max_tokens: 2048,
         system: systemPrompt,
         thinking: { type: "adaptive" },
+        tools: tools.length > 0 ? tools : undefined,
         messages,
       },
       { signal },
@@ -42,10 +66,42 @@ export class AnthropicStreamClient implements StreamingLlmClient {
       void onDelta(delta);
     });
 
-    // Resolves once the model's turn is fully complete; text deltas have already been forwarded
-    // via the "text" listener above by the time this returns. Propagates auth/network/abort
-    // errors to the caller (server/agent/runtime/sharedAgent.ts), which maps them to a
-    // `{type:"error"}` stream event rather than letting a raw SDK error reach the client.
-    await stream.finalMessage();
+    let response: Anthropic.Message;
+    try {
+      response = await stream.finalMessage();
+    } catch (err) {
+      throw classifyAnthropicError(err);
+    }
+
+    if (response.stop_reason === "refusal") {
+      throw new AgentError("tool_error", "The model declined to answer that.");
+    }
+
+    if (response.stop_reason === "tool_use") {
+      const block = response.content.find((b) => b.type === "tool_use");
+      if (!block) throw new AgentError("malformed_result", "The model signaled a tool call but didn't include one.");
+      return {
+        type: "tool_call",
+        toolCallId: block.id,
+        toolName: block.name,
+        input: (block.input as Record<string, unknown>) ?? {},
+      };
+    }
+
+    const textBlock = response.content.find((b) => b.type === "text");
+    return { type: "final", text: textBlock?.text ?? "" };
   }
+}
+
+function classifyAnthropicError(err: unknown): AgentError {
+  if (err instanceof Anthropic.AuthenticationError) {
+    return new AgentError("auth_failed", "The Anthropic API key is invalid.", err);
+  }
+  if (err instanceof Anthropic.APIConnectionError) {
+    return new AgentError("server_unavailable", "Could not reach the LLM.", err);
+  }
+  if (err instanceof Anthropic.APIError) {
+    return new AgentError("tool_error", "The LLM request failed.", err);
+  }
+  return new AgentError("unknown", "The LLM request failed unexpectedly.", err);
 }

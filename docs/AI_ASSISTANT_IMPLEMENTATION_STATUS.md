@@ -29,9 +29,9 @@ Build a real AI assistant inside the existing Commas AI Agent prototype that can
 
 ## Current phase
 
-**3 — Shared agent context and session model (implemented, live-verified)**
+**4 — First real tool layer (implemented, live-verified)**
 
-The context model from `AI_ASSISTANT_ARCHITECTURE.md` §5 is real, running code, shared by BOTH runtimes: one `AgentContext` type capable of representing conversation id/type, active dispute/customer/transaction id, dispute reason/status, connected sources, gathered evidence, investigation progress, and pending actions (§4's placeholder). GLOBAL chat gets broad workspace context (a live "disputes needing attention" summary); DISPUTE chat gets its dispute's facts automatically, and follow-ups work without repeating the dispute id — both verified live in-browser, not just in tests. The critical isolation requirement (switching disputes never leaks; returning to global never inherits) is enforced structurally by the session store's scope-mismatch guard and covered by dedicated tests.
+The shared agent's loop is now a real tool-calling loop, not conversation-only: `StreamingLlmClient.streamStep()` (renamed from `streamReply`) can request a tool call, `runSharedAgent` executes it via the SAME `SourceAdapter`/registry the legacy runtime already uses, feeds the result back, and repeats up to a step limit — structurally the same loop as `server/agent/runtime.ts`'s `runLoop`. Scope for this phase, explicit and temporary (`server/agent/tools/index.ts`'s `SHARED_AGENT_TOOL_SOURCES`): Commas's 5 read tools only — no OAuth connectors, no write tool. The exact 4-question test flow from the task ("Tell me about dispute #2481." → "Why was it disputed?" → "What evidence do we currently have?" → "Has this customer purchased from us before?") passes both in tests and live in-browser, entirely from GLOBAL chat, entirely tool-grounded, with the dispute recalled across turns from conversation history rather than repeated by the user.
 
 ## Phase log
 
@@ -41,7 +41,8 @@ The context model from `AI_ASSISTANT_ARCHITECTURE.md` §5 is real, running code,
 | 1 | Architecture definition (`AI_ASSISTANT_ARCHITECTURE.md`) — one shared agent, two modes; stack, session/context, tools, actions, persistence, risks, sequencing | ✅ Analyzed, not implemented — 2026-08-24 |
 | 2 | Foundational shared agent runtime — session/context/runtime modules, streaming LLM client (real + stub), `POST /api/agent/stream`, global-chat wiring | ✅ Implemented, live-verified — 2026-08-24 |
 | 3 | Shared agent context and session model — `AgentContext` (dispute facts, evidence, workspace summary, investigation progress), unified into both runtimes, isolation-tested | ✅ Implemented, live-verified — 2026-08-24 |
-| 4 | Real tool-calling wired into the shared agent's own loop (currently only the legacy runtime has live tools) | ⏳ Next |
+| 4 | First real tool layer — Commas read tools wired into the shared agent's own tool-calling loop, reusing the existing adapter/registry architecture | ✅ Implemented, live-verified — 2026-08-24 |
+| 5 | Write actions / propose-approve pipeline for the shared agent; wider (non-Commas) source tools once OAuth connectors exist | ⏳ Next |
 
 ## Phase 2 — what was built
 
@@ -223,23 +224,89 @@ Enforced structurally, not just by convention: `SessionStore.resolve()`'s pre-ex
 - `npm run build` — clean.
 - Live in-browser walkthrough — see above.
 
+## Phase 4 — what was built
+
+### The tool-calling loop
+
+`runSharedAgent` (`server/agent/runtime/sharedAgent.ts`, rewritten) is now a real loop, up to a 6-iteration step limit (matching `runtime.ts`'s `MAX_ITERATIONS`): resolve session → build context → **loop: LLM decides next step → tool call (executed via `adapters`/`registry`, same timeout/error-recovery as the legacy runtime) or final answer** → persist transcript → emit events. `server/app.ts` passes the SAME `adapters`/`registry` instances it already built once for the legacy runtime — nothing is duplicated or rebuilt.
+
+### `StreamingLlmClient`, renamed to a real step primitive
+
+`streamReply()` → `streamStep()` (`server/llm/streaming/types.ts`): takes `availableTools`/`toolHistory` (the same `LlmToolDef`/`ToolCallRecord` types `server/llm/types.ts` already defines for the legacy `LlmClient`) and returns one step at a time — `{type:"tool_call", ...}` or `{type:"final", text}` — exactly like `LlmClient.nextStep()`. This is what let the loop reuse `runtime.ts`'s control-flow shape structurally, not just conceptually. `AnthropicStreamClient.streamStep()` calls `client.messages.stream({tools, ...})` and inspects `stop_reason`, mirroring `AnthropicLlmClient.nextStep()`'s own message/tool-result construction almost line for line, just decided over a stream.
+
+### One reasoning engine, not two
+
+`StubStreamClient.streamStep()` no longer has its own scripted replies — it bridges into the SAME `StubLlmClient` (`server/llm/stubClient.ts`) the legacy runtime already uses (`pageContextFromAgentContext`, the reverse of Phase 3's `agentContextFromPageContext`, does the shape conversion), then chunks the resulting final text for streaming. This is the "one shared reasoning engine" principle — already applied to the context model in Phase 3 — now applied to the LLM layer too, instead of maintaining a second ~600-line scripted reasoning engine in parallel.
+
+`StubLlmClient` itself gained one genuinely new capability, additive and gated to `context?.kind !== "dispute"` (so every existing dispute-context-chat test and behavior is untouched): resolving which dispute a GLOBAL chat is talking about from the message text (`#2481`, or a bare `2481`) or, for a follow-up with no id restated, the most recent dispute mentioned earlier in the conversation (`findRecentDisputeId`, the same idiom the file already used for `findRecentEmail`). This is what makes the task's exact test flow work from global chat.
+
+### Tool scope for this phase
+
+`server/agent/tools/index.ts` (filled in from its Phase 2 placeholder): `sharedAgentToolsFor(enabledSources, registry)` returns only registry entries where `sourceId` is in `SHARED_AGENT_TOOL_SOURCES` (currently `["commas"]`), the tool's own classification is `"read"`, and the source is enabled for that specific chat. Concretely, the shared agent can call: `commas_get_dispute`, `commas_list_disputes`, `fanbasis_list_customers`, `fanbasis_list_transactions`, `fanbasis_get_transaction` — the exact data already exposed by the existing Commas mock (`server/mcp/mockCommasServer.ts`), inspected before writing anything new; no tool was invented for data that doesn't exist (evidence/product-info/policies/access-records are either already embedded in `commas_get_dispute`'s response or have no real structured backing in this prototype — see Known limitations). `commas_mark_dispute_response_ready` (the one write tool on this source) and every non-Commas source stay excluded — enforced by a dedicated test suite (`tests/server/tools.test.ts`) that constructs all 6 real adapters and proves the scoping holds even when every source is "enabled."
+
+### Verified: structured data, not hallucination; graceful "I don't have that"
+
+- "Tell me about dispute #2481." → a real `commas_get_dispute` call, answered from its result.
+- An unknown/nonexistent dispute id → "I couldn't find dispute #9999 — Dispute not found: 9999.", never a fabricated case.
+- No sources enabled for a chat → "No sources are enabled for this chat — enable at least one in the sources menu and ask again.", never silently answering anyway.
+- Two different dispute-focused conversations (or two dispute ids named back-to-back in the same global chat) never mix up which dispute is in focus — covered both as a session-isolation property (Phase 3) and now as an LLM-reasoning-layer property specific to the new dispute-focus resolution.
+
+**Live-verified in-browser**, both servers running, stub LLM: the full 4-question flow from a single fresh GLOBAL chat —
+1. "Tell me about dispute #2481." → "**Dispute #2481** — product not received, $499, evidence due August 23."
+2. "Why was it disputed?" (no id) → the real `likelyReason` text ("Sarah engaged heavily with the product... 14 logins and 6 of 12 lessons completed...").
+3. "What evidence do we currently have?" → "Before responding, you're missing: Access & activity records, Customer communications, Transaction & payment details."
+4. "Has this customer purchased from us before?" → "Found 1 transaction totaling $499.00."
+
+Then, separately, the Resolution Center: opened Dispute #2502 (Marcus Webb, a different demo case), "Investigate with AI" → "Investigate this dispute" → the exact same real multi-source investigation as always ("Fathom: no recorded calls with Marcus", "Zoom: no meetings attended by Marcus", matching this case's authored "missing_evidence" scenario) — zero regression from the `stubClient.ts`/`runtime.ts` changes, since the new logic is entirely gated behind `context?.kind !== "dispute"`. Console: no errors.
+
+### Files created
+
+| File | Purpose |
+|---|---|
+| `tests/server/tools.test.ts` | `sharedAgentToolsFor` scoping: Commas-only, read-only, respects per-chat enabled sources |
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `server/agent/tools/index.ts` | Filled in from the Phase 2 placeholder: `sharedAgentToolsFor()`, `SHARED_AGENT_TOOL_SOURCES` |
+| `server/agent/runtime/sharedAgent.ts` | Rewritten: real tool-calling loop (adapters/registry, step limit, per-tool timeout/error recovery) replacing the single `streamReply` call |
+| `server/llm/streaming/types.ts` | `streamReply(StreamReplyArgs)` → `streamStep(StreamStepArgs): Promise<StreamStepResult>` — tool-call-or-final, reusing `server/llm/types.ts`'s `LlmToolDef`/`ToolCallRecord` |
+| `server/llm/streaming/anthropicStreamClient.ts` | Implements `streamStep()` via `messages.stream({tools})`, mirroring `AnthropicLlmClient.nextStep()` |
+| `server/llm/streaming/stubStreamClient.ts` | Implements `streamStep()` by delegating to `StubLlmClient`, then chunking the final text |
+| `server/llm/stubClient.ts` | + global-mode dispute-focus resolution (`findDisputeIdMentioned`/`findRecentDisputeId`/`describeDispute`) and a customer-purchase-history check, both additive and gated off dispute-context chats |
+| `server/agent/context/model.ts` | `+ pageContextFromAgentContext()` — the reverse adapter, used only by the stub bridge |
+| `server/app.ts` | `runSharedAgent` call now passes `adapters`/`registry` (already constructed once, reused, not duplicated) |
+| `server/agent/README.md`, `server/agent/context/model.ts`'s doc comment | Updated — no longer describe the shared agent as conversation-only |
+| `tests/server/sharedAgent.test.ts` | `streamReply` → `streamStep` throughout; new tests for the real tool loop, the 4-question flow, no-sources/no-data honesty; context-isolation tests rewritten to assert on real tool-grounded text instead of the old context-only reply |
+
+No file under `src/` was touched this phase — the entire tool layer is server-side; the existing GLOBAL chat UI (already wired to `POST /api/agent/stream` since Phase 2) needed no changes to start receiving tool-grounded answers.
+
+### Verification performed
+
+- `npx tsc -b` — clean.
+- `npm run lint` — clean.
+- `npx vitest run` — **143/143 passing** (133 at Phase 3's commit; +10 this phase, including the full 4-question flow, tool-scoping tests, and rewritten isolation tests).
+- `npm run build` — clean.
+- Live in-browser walkthrough — see above.
+
 ## Known limitations (honest, not hidden)
 
-- **Still conversation-only for the shared agent — no tools.** Global chat's context is now genuinely rich (workspace summary) and dispute-mode's context *can* carry real facts, but the shared agent still can't call a tool — it only knows what's handed to it in `AgentContext` for that turn. "What did the customer say?" (a task example scenario) has no field in this phase's context model and isn't answerable by either runtime's stub in a grounded way — the legacy runtime's real communications-lookup tool covers this for dispute chats today, when asked as a distinct investigation step; the shared agent doesn't have an equivalent yet. Real tool-calling in the shared agent's own loop is Phase 4.
-- **Dispute chats still don't route through the shared agent's streaming endpoint.** They keep the legacy `/api/agent/run` path (real tools, write-approval) entirely unchanged — a deliberate risk decision (see Phase 3 section above), not an oversight. The shared agent's own dispute-mode support is real and tested (`tests/server/sharedAgent.test.ts`), just not yet the frontend's actual dispute-chat transport.
-- **`pendingActions` is always `[]`.** The context model can *represent* the field (typed `never[]`, documented), but nothing populates it — that's architecture §7's propose/approve pipeline, still unbuilt.
-- **Write/approval capability still exists only on dispute-context chats** (unchanged from Phase 2 — global chats still have no tools at all).
+- **Dispute chats still don't route through the shared agent's streaming endpoint.** They keep the legacy `/api/agent/run` path (the full 6-source tool set, write-approval) entirely unchanged — deliberate: bringing dispute chats onto SSE would need a write-approval story SSE doesn't have yet (see next point). The shared agent's own dispute-mode tool-calling is real and tested, just not yet the frontend's actual dispute-chat transport.
+- **No write tool, no approval flow, for the shared agent.** `commas_mark_dispute_response_ready` is excluded from `sharedAgentToolsFor` entirely — pausing an SSE stream mid-flight for approval has no established pattern in this codebase yet (the legacy runtime's `pendingApproval` is a JSON round-trip). `pendingActions` (the context model's placeholder) is still always `[]`.
+- **Commas only — no Fathom/Zoom/Gmail/Calendar/GoHighLevel tools for the shared agent yet**, by explicit instruction this phase ("do not implement OAuth connectors yet"). Their adapters and registry entries already exist unchanged; widening `SHARED_AGENT_TOOL_SOURCES` is the entire change needed later.
+- **No separate "product information," "policies," or "access/activity records" tools.** Inspected the actual data model before building anything: none of these exist as queryable structured data in this prototype (evidence categories are UI checklist labels; access-activity detail like "14 logins" is narrative prose inside `likelyReason`, not a field) — only `commas_get_dispute`/`commas_list_disputes`/customer/transaction tools have real structured data behind them, so only those were wired up.
 - **Session memory is still in-process only** (unchanged from Phase 2 — no `data/state.json` persistence for either runtime).
-- **`server/types.ts` / `src/lib/types.ts`** still hand-mirrored, not unified into a `shared/` module (architecture §10) — `DisputeContextDetail`'s two new fields were added to both by hand, same as every other field in that type.
+- **`server/types.ts` / `src/lib/types.ts`** still hand-mirrored, not unified into a `shared/` module (architecture §10).
 
 ## Implementation sequence (from architecture §11)
 
 1. ~~Live model on the existing loop (no UI change)~~ — **done in Phase 2**, plus streaming + sessions pulled forward from §11's phases 3–4.
-2. One dataset + wider Commas/connector tools with citations — still open; the context model (this phase) is now rich enough to *carry* dataset facts, but nothing calls a tool to *fetch* them dynamically yet
-3. ~~Server-side sessions + context envelope + context block~~ — **done this phase**: `AgentContext` is the envelope, shared by both runtimes, isolation-tested
+2. One dataset + wider Commas/connector tools with citations — **Commas tools done this phase**; connector (Fathom/Zoom/Gmail/Calendar/GoHighLevel) tools for the shared agent still open, blocked on their OAuth story per this phase's own instruction
+3. ~~Server-side sessions + context envelope + context block~~ — **done in Phase 3**: `AgentContext` is the envelope, shared by both runtimes, isolation-tested
 4. Streaming SSE transport consumed by `useChatStore` — **done in Phase 2**
-5. Dispute-mode investigation prompt (loop, stopping criteria, report format)
-6. Resolution Center persistence + proposal/approval actions (`ProposalCard`, executors) — `pendingActions`'s slot now exists in the context model, unpopulated
+5. Dispute-mode investigation prompt (loop, stopping criteria, report format) — the shared agent's tool-calling loop (this phase) is the mechanism; a dedicated investigation *prompt/strategy* on top of it is still open
+6. Resolution Center persistence + proposal/approval actions (`ProposalCard`, executors) — `pendingActions`'s slot exists in the context model, unpopulated; needs the write-approval-over-SSE story above first
 7. Global-mode polish, hardening, docs, regression suite
 
 ## Notes

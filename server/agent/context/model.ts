@@ -5,9 +5,11 @@
  * shared agent runtime (server/agent/runtime/sharedAgent.ts) builds one from its session +
  * per-request facts, and the *legacy* runtime (server/agent/runtime.ts) builds one from its own
  * per-request `PageContext` via `agentContextFromPageContext` below — two different runtimes,
- * one context representation, satisfying "do not create two separate agent backends" at the
- * context layer specifically (tool execution is a separate, intentionally-still-legacy concern
- * for dispute chats — see server/agent/README.md).
+ * one context representation, satisfying "do not create two separate agent backends". Since
+ * Phase 4 (server/agent/tools/index.ts), the shared agent's own loop also does real tool calls
+ * against this same context — dispute-context CHATS specifically still route through the legacy
+ * runtime for now (its full 6-source tool set and write-approval pause have no SSE equivalent
+ * yet), a frontend-routing decision, not a capability gap in this context model.
  */
 import type { PageContext, SourceId } from "../../types.js";
 
@@ -112,4 +114,39 @@ export function agentContextFromPageContext(conversationId: string, context: Pag
     });
   }
   return buildAgentContext({ conversationId, conversationType: "global" });
+}
+
+/**
+ * The reverse of `agentContextFromPageContext` above — adapts an `AgentContext` back into a
+ * `PageContext`-shaped object, used ONLY by `server/llm/streaming/stubStreamClient.ts` to reuse
+ * the legacy `StubLlmClient`'s deterministic reasoning (server/llm/stubClient.ts) for the shared
+ * agent's own tool-calling loop, instead of duplicating that ~600-line scripted reasoning engine.
+ *
+ * Not a byte-perfect round trip: `DisputeFacts` (this context model) deliberately doesn't carry
+ * `amountCents`/`openedAt`/`evidenceDueAt` — the shared agent's stub reasoning gets those facts
+ * from the `commas_get_dispute` tool result, exactly as a real model would, never from context
+ * text. `StubLlmClient` itself never reads those three fields off `PageContext.dispute` either
+ * (only `customerEmail`, plus `PageContext.id`/`kind`) — grep it before assuming otherwise — so
+ * the placeholder zero/empty values below are never actually consulted, not a lossy shortcut.
+ */
+export function pageContextFromAgentContext(context: AgentContext): PageContext | undefined {
+  if (context.conversationType !== "dispute" || !context.dispute) return undefined;
+  const d = context.dispute;
+  return {
+    kind: "dispute",
+    id: d.disputeId,
+    label: `Dispute #${d.disputeId} — ${d.customerName}`,
+    dispute: {
+      customerName: d.customerName,
+      customerEmail: d.customerId,
+      transactionId: d.transactionId,
+      amountCents: 0,
+      reason: d.reason,
+      openedAt: "",
+      evidenceDueAt: "",
+      evidenceStatus: d.evidenceStatus,
+      status: d.status as "Needs response" | "Won",
+      evidenceSummary: d.evidenceSummary,
+    },
+  };
 }

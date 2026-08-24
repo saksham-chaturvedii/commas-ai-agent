@@ -7,6 +7,20 @@ import { buildContextPrompt } from "../../server/agent/context/buildContext.js";
 import { buildAgentContext, agentContextFromPageContext } from "../../server/agent/context/model.js";
 import { runSharedAgent, type AgentStreamEvent } from "../../server/agent/runtime/sharedAgent.js";
 import { StubStreamClient } from "../../server/llm/streaming/stubStreamClient.js";
+import { CommasAdapter } from "../../server/adapters/commasAdapter.js";
+import { buildToolRegistry, type RegisteredTool } from "../../server/agent/registry.js";
+import type { SourceAdapter } from "../../server/adapters/types.js";
+
+/** Real mock-backed Commas adapter + registry (server/mcp/mockCommasServer.ts), shared across
+ * every runSharedAgent test in this file — in-process, no network, safe to reuse (this phase's
+ * shared agent never calls the one write tool on this source, so nothing here is mutated by a
+ * test run). `connectedSources: ["commas"]` on a call's `requestContext` is what actually makes
+ * these tools visible to that call — see server/agent/tools/index.ts's `sharedAgentToolsFor`. */
+async function commasFixture(): Promise<{ adapters: SourceAdapter[]; registry: Map<string, RegisteredTool> }> {
+  const adapters = [await CommasAdapter.createMock()];
+  const registry = await buildToolRegistry(adapters);
+  return { adapters, registry };
+}
 
 /**
  * Tests the shared agent runtime (docs/AI_ASSISTANT_ARCHITECTURE.md §2–§4) — session storage,
@@ -260,6 +274,13 @@ describe("agentContextFromPageContext (legacy runtime's adapter onto the shared 
 });
 
 describe("runSharedAgent (StubStreamClient)", () => {
+  let adapters: SourceAdapter[];
+  let registry: Map<string, RegisteredTool>;
+  beforeAll(async () => {
+    ({ adapters, registry } = await commasFixture());
+  });
+  const commasSources = { connectedSources: ["commas" as const] };
+
   it("emits ordered delta events that reassemble into the full reply, then a done event", async () => {
     const store = new SessionStore();
     const events: AgentStreamEvent[] = [];
@@ -267,8 +288,11 @@ describe("runSharedAgent (StubStreamClient)", () => {
       sessionId: "chat-1",
       config: { mode: "global" },
       userMessage: "hello",
+      requestContext: commasSources,
       llmClient: new StubStreamClient(),
       sessionStore: store,
+      adapters,
+      registry,
       onEvent: (e) => {
         events.push(e);
       },
@@ -289,8 +313,11 @@ describe("runSharedAgent (StubStreamClient)", () => {
       sessionId: "chat-1",
       config: { mode: "global" },
       userMessage: "hello",
+      requestContext: commasSources,
       llmClient: new StubStreamClient(),
       sessionStore: store,
+      adapters,
+      registry,
       onEvent: () => {},
     });
 
@@ -305,26 +332,32 @@ describe("runSharedAgent (StubStreamClient)", () => {
     const store = new SessionStore();
     const seenTranscriptLengths: number[] = [];
     const client = new StubStreamClient();
-    const originalStreamReply = client.streamReply.bind(client);
-    client.streamReply = (args) => {
+    const originalStreamStep = client.streamStep.bind(client);
+    client.streamStep = (args) => {
       seenTranscriptLengths.push(args.transcript.length);
-      return originalStreamReply(args);
+      return originalStreamStep(args);
     };
 
     await runSharedAgent({
       sessionId: "chat-1",
       config: { mode: "global" },
       userMessage: "hi",
+      requestContext: commasSources,
       llmClient: client,
       sessionStore: store,
+      adapters,
+      registry,
       onEvent: () => {},
     });
     await runSharedAgent({
       sessionId: "chat-1",
       config: { mode: "global" },
       userMessage: "thanks",
+      requestContext: commasSources,
       llmClient: client,
       sessionStore: store,
+      adapters,
+      registry,
       onEvent: () => {},
     });
 
@@ -335,39 +368,127 @@ describe("runSharedAgent (StubStreamClient)", () => {
     expect(store.get("chat-1")!.transcript).toHaveLength(4);
   });
 
-  it("dispute mode adds the runtime's own no-tools-yet caveat; buildContextPrompt itself stays tool-agnostic (see buildContextPrompt tests above)", async () => {
+  it("no sources enabled: a clean, honest answer instead of silently answering anyway", async () => {
     const store = new SessionStore();
-    const seenPrompts: string[] = [];
-    const client = new StubStreamClient();
-    const originalStreamReply = client.streamReply.bind(client);
-    client.streamReply = (args) => {
-      seenPrompts.push(args.systemPrompt);
-      return originalStreamReply(args);
-    };
-
+    const events: AgentStreamEvent[] = [];
     await runSharedAgent({
       sessionId: "chat-1",
-      config: { mode: "dispute", disputeId: "2481" },
-      userMessage: "what evidence do we have?",
-      requestContext: {
-        dispute: {
-          disputeId: "2481",
-          customerId: "sarah.johnson@email.com",
-          customerName: "Sarah Johnson",
-          transactionId: "txn_1",
-          reason: "product_not_received",
-          status: "Needs response",
-          evidenceStatus: "not_started",
-          evidenceSummary: [],
-        },
-      },
-      llmClient: client,
+      config: { mode: "global" },
+      userMessage: "hello",
+      // no requestContext.connectedSources — nothing enabled for this chat
+      llmClient: new StubStreamClient(),
       sessionStore: store,
-      onEvent: () => {},
+      adapters,
+      registry,
+      onEvent: (e) => { events.push(e); },
     });
+    const done = events.find((e): e is Extract<AgentStreamEvent, { type: "done" }> => e.type === "done")!;
+    expect(done.text.toLowerCase()).toContain("no sources are enabled");
+  });
 
-    expect(seenPrompts[0]).toContain("Dispute #2481");
-    expect(seenPrompts[0].toLowerCase()).toContain("do not have live investigation tools");
+  it("real tool-calling loop: 'Tell me about dispute #2481' calls commas_get_dispute and answers from the real result, never fabricating", async () => {
+    const store = new SessionStore();
+    const events: AgentStreamEvent[] = [];
+    await runSharedAgent({
+      sessionId: "chat-1",
+      config: { mode: "global" },
+      userMessage: "Tell me about dispute #2481.",
+      requestContext: commasSources,
+      llmClient: new StubStreamClient(),
+      sessionStore: store,
+      adapters,
+      registry,
+      onEvent: (e) => { events.push(e); },
+    });
+    const done = events.find((e): e is Extract<AgentStreamEvent, { type: "done" }> => e.type === "done")!;
+    expect(done.text).toContain("Dispute #2481");
+    expect(done.text).toContain("product not received");
+    expect(done.text).toContain("$499"); // money() drops trailing .00 for whole-dollar amounts
+  });
+
+  it("real tool-calling loop, full 4-question flow: dispute overview -> why -> evidence -> customer purchase history, without repeating the id", async () => {
+    const store = new SessionStore();
+    const client = new StubStreamClient();
+    const ask = async (message: string) => {
+      const events: AgentStreamEvent[] = [];
+      await runSharedAgent({
+        sessionId: "chat-1",
+        config: { mode: "global" },
+        userMessage: message,
+        requestContext: commasSources,
+        llmClient: client,
+        sessionStore: store,
+        adapters,
+        registry,
+        onEvent: (e) => { events.push(e); },
+      });
+      return events.find((e): e is Extract<AgentStreamEvent, { type: "done" }> => e.type === "done")!.text;
+    };
+
+    const overview = await ask("Tell me about dispute #2481.");
+    expect(overview).toContain("Dispute #2481");
+
+    // No dispute id repeated from here on — the stub has to recall #2481 from conversation
+    // history, exactly like a real tool-calling model would.
+    const why = await ask("Why was it disputed?");
+    expect(why.toLowerCase()).toContain("product not received");
+    expect(why).toContain("14 logins"); // dispute #2481's real, authored likelyReason text
+
+    const evidence = await ask("What evidence do we currently have?");
+    expect(evidence).toContain("Access & activity records");
+    expect(evidence).toContain("Customer communications");
+    expect(evidence).toContain("Transaction & payment details");
+
+    const history = await ask("Has this customer purchased from us before?");
+    expect(history).toMatch(/Found 1 transaction totaling \$499\.00/);
+  });
+
+  it("two different dispute-focused global conversations never mix up which dispute is in focus", async () => {
+    // Isolation at the LLM-reasoning layer, not just the session layer (see the dedicated
+    // "context isolation" describe block below for the session-store-level guarantee): even
+    // within ONE global session, naming a different dispute must not leak the previous one's
+    // facts into the new answer.
+    const store = new SessionStore();
+    const client = new StubStreamClient();
+    const ask = async (message: string) => {
+      const events: AgentStreamEvent[] = [];
+      await runSharedAgent({
+        sessionId: "chat-1",
+        config: { mode: "global" },
+        userMessage: message,
+        requestContext: commasSources,
+        llmClient: client,
+        sessionStore: store,
+        adapters,
+        registry,
+        onEvent: (e) => { events.push(e); },
+      });
+      return events.find((e): e is Extract<AgentStreamEvent, { type: "done" }> => e.type === "done")!.text;
+    };
+
+    const first = await ask("Tell me about dispute #2481.");
+    expect(first).toContain("Dispute #2481");
+    const second = await ask("Tell me about dispute #2390.");
+    expect(second).toContain("Dispute #2390");
+    expect(second).not.toContain("Dispute #2481");
+  });
+
+  it("no data available: honestly says a dispute doesn't exist rather than fabricating one", async () => {
+    const store = new SessionStore();
+    const events: AgentStreamEvent[] = [];
+    await runSharedAgent({
+      sessionId: "chat-1",
+      config: { mode: "dispute", disputeId: "9999" },
+      userMessage: "why was it disputed?",
+      requestContext: { ...commasSources, dispute: disputeFacts({ disputeId: "9999", customerName: "Nobody" }) },
+      llmClient: new StubStreamClient(),
+      sessionStore: store,
+      adapters,
+      registry,
+      onEvent: (e) => { events.push(e); },
+    });
+    const done = events.find((e): e is Extract<AgentStreamEvent, { type: "done" }> => e.type === "done")!;
+    expect(done.text).toContain("couldn't find dispute #9999");
   });
 
   it("tracks investigation progress on the session's own context — advances only after a turn completes", async () => {
@@ -379,8 +500,11 @@ describe("runSharedAgent (StubStreamClient)", () => {
       sessionId: "chat-1",
       config: { mode: "dispute", disputeId: "2481" },
       userMessage: "hello",
+      requestContext: commasSources,
       llmClient: new StubStreamClient(),
       sessionStore: store,
+      adapters,
+      registry,
       onEvent: () => {},
     });
     expect(store.get("chat-1")!.context.investigation).toEqual({ status: "in_progress", turnsCompleted: 1 });
@@ -389,8 +513,11 @@ describe("runSharedAgent (StubStreamClient)", () => {
       sessionId: "chat-1",
       config: { mode: "dispute", disputeId: "2481" },
       userMessage: "thanks",
+      requestContext: commasSources,
       llmClient: new StubStreamClient(),
       sessionStore: store,
+      adapters,
+      registry,
       onEvent: () => {},
     });
     expect(store.get("chat-1")!.context.investigation).toEqual({ status: "in_progress", turnsCompleted: 2 });
@@ -403,8 +530,11 @@ describe("runSharedAgent (StubStreamClient)", () => {
       sessionId: "chat-1",
       config: { mode: "global" },
       userMessage: "hello",
-      llmClient: { streamReply: () => Promise.reject(new Error("boom")) },
+      requestContext: commasSources,
+      llmClient: { streamStep: () => Promise.reject(new Error("boom")) },
       sessionStore: store,
+      adapters,
+      registry,
       onEvent: (e) => { events.push(e); },
     });
     expect(events).toEqual([{ type: "error", message: "boom" }]);
@@ -420,8 +550,9 @@ describe("runSharedAgent (StubStreamClient)", () => {
       sessionId: "chat-1",
       config: { mode: "global" },
       userMessage: "hello",
+      requestContext: commasSources,
       llmClient: {
-        streamReply: async ({ onDelta }) => {
+        streamStep: async ({ onDelta }) => {
           await onDelta("partial");
           controller.abort();
           const err = new Error("aborted");
@@ -430,6 +561,8 @@ describe("runSharedAgent (StubStreamClient)", () => {
         },
       },
       sessionStore: store,
+      adapters,
+      registry,
       onEvent: (e) => { events.push(e); },
       signal: controller.signal,
     });
@@ -450,8 +583,11 @@ describe("runSharedAgent (StubStreamClient)", () => {
       sessionId: "chat-1",
       config: { mode: "global" },
       userMessage: "hello",
-      llmClient: { streamReply: () => Promise.reject(err) },
+      requestContext: commasSources,
+      llmClient: { streamStep: () => Promise.reject(err) },
       sessionStore: store,
+      adapters,
+      registry,
       onEvent: (e) => { events.push(e); },
       // no signal passed at all — signal.aborted can't be true
     });
@@ -469,8 +605,11 @@ describe("runSharedAgent (StubStreamClient)", () => {
       sessionId: "chat-1",
       config: { mode: "global" },
       userMessage: "hello", // GREETING_REPLY — many words, many chunk delays, finishes slower
+      requestContext: commasSources,
       llmClient: client,
       sessionStore: store,
+      adapters,
+      registry,
       onEvent: () => {},
     });
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -478,8 +617,11 @@ describe("runSharedAgent (StubStreamClient)", () => {
       sessionId: "chat-1",
       config: { mode: "global" },
       userMessage: "thanks", // ACKNOWLEDGMENT_REPLY — one word, would finish first if unserialized
+      requestContext: commasSources,
       llmClient: client,
       sessionStore: store,
+      adapters,
+      registry,
       onEvent: () => {},
     });
     await Promise.all([first, second]);
@@ -495,10 +637,19 @@ describe("runSharedAgent (StubStreamClient)", () => {
 });
 
 describe("context isolation (critical requirement: switching disputes never leaks, returning to global never inherits)", () => {
-  it("two different dispute chats sharing one SessionStore never see each other's facts, end to end", async () => {
+  let adapters: SourceAdapter[];
+  let registry: Map<string, RegisteredTool>;
+  beforeAll(async () => {
+    ({ adapters, registry } = await commasFixture());
+  });
+  const commasSources = { connectedSources: ["commas" as const] };
+
+  it("two different dispute chats sharing one SessionStore never see each other's facts, end to end — real tool-grounded answers, not just context text", async () => {
     // Mirrors the real app: each dispute gets its own chat/session id (App.tsx dedupes chats by
     // context kind+id), so #2481 and #2390 are two entirely separate sessions in the SAME store
-    // instance a running server actually uses (one SessionStore per createApp()).
+    // instance a running server actually uses (one SessionStore per createApp()). Both ask the
+    // real tool-calling loop the same question — the answer comes from each session's own
+    // commas_get_dispute call, never a shared/leaked value.
     const store = new SessionStore();
     const client = new StubStreamClient();
     const eventsA: AgentStreamEvent[] = [];
@@ -508,41 +659,34 @@ describe("context isolation (critical requirement: switching disputes never leak
       sessionId: "chat-2481",
       config: { mode: "dispute", disputeId: "2481" },
       userMessage: "what evidence do we have?",
-      requestContext: {
-        dispute: disputeFacts({
-          disputeId: "2481",
-          customerName: "Sarah Johnson",
-          evidenceSummary: [{ category: "Transaction & payment details", count: 1 }],
-        }),
-      },
+      requestContext: { ...commasSources, dispute: disputeFacts({ disputeId: "2481", customerName: "Sarah Johnson" }) },
       llmClient: client,
       sessionStore: store,
+      adapters,
+      registry,
       onEvent: (e) => { eventsA.push(e); },
     });
     await runSharedAgent({
       sessionId: "chat-2390",
       config: { mode: "dispute", disputeId: "2390" },
       userMessage: "what evidence do we have?",
-      requestContext: {
-        dispute: disputeFacts({
-          disputeId: "2390",
-          customerName: "Priya Nair",
-          evidenceSummary: [{ category: "Customer communications", count: 3 }],
-        }),
-      },
+      requestContext: { ...commasSources, dispute: disputeFacts({ disputeId: "2390", customerName: "Priya Nair" }) },
       llmClient: client,
       sessionStore: store,
+      adapters,
+      registry,
       onEvent: (e) => { eventsB.push(e); },
     });
 
     const doneA = eventsA.find((e): e is Extract<AgentStreamEvent, { type: "done" }> => e.type === "done")!.text;
     const doneB = eventsB.find((e): e is Extract<AgentStreamEvent, { type: "done" }> => e.type === "done")!.text;
+    // #2481 (Sarah Johnson): open, missing evidence — real DISPUTES record text.
+    expect(doneA).toContain("Access & activity records");
     expect(doneA).toContain("Transaction & payment details");
-    expect(doneA).not.toContain("Customer communications");
-    expect(doneA).not.toContain("2390");
-    expect(doneB).toContain("Customer communications");
-    expect(doneB).not.toContain("Transaction & payment details");
-    expect(doneB).not.toContain("2481");
+    expect(doneA).not.toContain("already resolved");
+    // #2390 (Priya Nair): already resolved — a completely different real answer shape.
+    expect(doneB.toLowerCase()).toContain("already resolved");
+    expect(doneB).not.toContain("Access & activity records");
 
     expect(store.get("chat-2481")!.context.dispute?.customerName).toBe("Sarah Johnson");
     expect(store.get("chat-2390")!.context.dispute?.customerName).toBe("Priya Nair");
@@ -558,15 +702,11 @@ describe("context isolation (critical requirement: switching disputes never leak
       sessionId: "chat-1",
       config: { mode: "dispute", disputeId: "2481" },
       userMessage: "what evidence do we have?",
-      requestContext: {
-        dispute: disputeFacts({
-          disputeId: "2481",
-          customerName: "Sarah Johnson",
-          evidenceSummary: [{ category: "Transaction & payment details", count: 1 }],
-        }),
-      },
+      requestContext: { ...commasSources, dispute: disputeFacts({ disputeId: "2481", customerName: "Sarah Johnson" }) },
       llmClient: client,
       sessionStore: store,
+      adapters,
+      registry,
       onEvent: (e) => { disputeEvents.push(e); },
     });
 
@@ -575,18 +715,23 @@ describe("context isolation (critical requirement: switching disputes never leak
       sessionId: "chat-1", // same id — the scope-mismatch guard is what must protect this
       config: { mode: "global" },
       userMessage: "what evidence do we have?", // same question, now with no dispute in scope
+      requestContext: commasSources,
       llmClient: client,
       sessionStore: store,
+      adapters,
+      registry,
       onEvent: (e) => { globalEvents.push(e); },
     });
     warn.mockRestore();
 
     const disputeAnswer = disputeEvents.find((e): e is Extract<AgentStreamEvent, { type: "done" }> => e.type === "done")!.text;
     const globalAnswer = globalEvents.find((e): e is Extract<AgentStreamEvent, { type: "done" }> => e.type === "done")!.text;
-    expect(disputeAnswer).toContain("Transaction & payment details");
-    // The exact same question, asked right after in the same slot, gets the generic fallback —
-    // not Sarah Johnson's evidence — because global mode has no `dispute` in its context at all.
-    expect(globalAnswer).not.toContain("Transaction & payment details");
+    expect(disputeAnswer).toContain("Access & activity records");
+    // The exact same question, asked right after in the same slot, does NOT resolve to Sarah
+    // Johnson's dispute — global mode has no dispute in focus (no id mentioned, none in this
+    // fresh session's history), so it falls through to the generic no-specific-answer reply,
+    // never fabricating a dispute-shaped answer out of nothing.
+    expect(globalAnswer).not.toContain("Access & activity records");
     expect(globalAnswer).not.toContain("Sarah Johnson");
     expect(globalAnswer).not.toContain("2481");
 
@@ -617,6 +762,24 @@ describe("POST /api/agent/stream (HTTP layer)", () => {
     expect(deltaFrames.length).toBeGreaterThan(1);
     const reassembled = deltaFrames.map((f) => (f.data as { text: string }).text).join("");
     expect(reassembled).toBe((frames[frames.length - 1].data as { text: string }).text);
+  });
+
+  it("the real tool-calling loop runs end to end over the actual HTTP route — a global-mode dispute question gets a tool-grounded answer", async () => {
+    const res = await app.request("/api/agent/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "http-chat-tools",
+        mode: "global",
+        message: "Tell me about dispute #2481.",
+        enabledSources: ["commas"],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const frames = await readSSE(res);
+    const done = frames[frames.length - 1];
+    expect(done.event).toBe("done");
+    expect((done.data as { text: string }).text).toContain("Dispute #2481");
   });
 
   it("supports dispute-mode session config over the same route", async () => {

@@ -1,4 +1,5 @@
 import type { LlmClient, LlmStepInput, LlmStepResult, ToolCallRecord } from "./types.js";
+import type { ConversationTurn } from "../types.js";
 
 /**
  * Deterministic stand-in for a real LLM, used whenever ANTHROPIC_API_KEY isn't configured
@@ -18,6 +19,32 @@ import type { LlmClient, LlmStepInput, LlmStepResult, ToolCallRecord } from "./t
  */
 
 const DISPUTE_CHAIN = ["commas_get_dispute", "crm_get_contact", "gmail_search_threads", "fathom_search_calls", "zoom_list_meetings"];
+
+/** The 5 demo dispute ids (docs/active-context.md — "Resolution Center Demo-Readiness") — used
+ * ONLY to resolve which dispute a GLOBAL chat is talking about (see `resolveGlobalDisputeFocus`
+ * below); dispute-context chats already know their dispute from `context.id` and never need
+ * this. Restricted to known ids, not a generic \d{4} match, so this stays deterministic and
+ * can't misfire on an unrelated 4-digit number in the message (an amount, a year, a phone
+ * digit) — consistent with how every other branch in this file is scripted against the exact
+ * demo dataset, never a general-purpose pattern. */
+const KNOWN_DISPUTE_IDS = ["2481", "2502", "2417", "2455", "2390"];
+
+function findDisputeIdMentioned(text: string): string | undefined {
+  const hashMatch = text.match(/#(\d{4})\b/);
+  if (hashMatch && KNOWN_DISPUTE_IDS.includes(hashMatch[1])) return hashMatch[1];
+  return KNOWN_DISPUTE_IDS.find((id) => new RegExp(`\\b${id}\\b`).test(text));
+}
+
+/** Global chat has no `context.id` to fall back on, so a follow-up like "Why was it disputed?"
+ * (no id restated) has to recall which dispute the conversation was just about — mirrors
+ * `findRecentEmail` below exactly (scan conversation text, most recent turn first). */
+function findRecentDisputeId(history: ConversationTurn[]): string | undefined {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const id = findDisputeIdMentioned(history[i].text);
+    if (id) return id;
+  }
+  return undefined;
+}
 
 /** Matches an email without swallowing a trailing sentence period — plain `[\w.-]+` for the
  * domain greedily eats a "." that ends a sentence (e.g. "...sarah.johnson@email.com." from an
@@ -89,6 +116,56 @@ export class StubLlmClient implements LlmClient {
     }
 
     const calledNames = toolHistory.map((t) => t.toolName);
+
+    // GLOBAL chat naming or continuing to discuss a specific dispute — e.g. "Tell me about
+    // dispute #2481.", then, with no id restated, "Why was it disputed?", "What evidence do we
+    // currently have?", "Has this customer purchased from us before?". Dispute-context chats
+    // never reach this: they already know their dispute from `context.id` below.
+    if (context?.kind !== "dispute" && hasTool("commas_get_dispute")) {
+      const disputeId = findDisputeIdMentioned(userPrompt) ?? findRecentDisputeId(conversationHistory);
+      if (disputeId) {
+        const needsDisputeLookup = !calledNames.includes("commas_get_dispute");
+        if (needsDisputeLookup) {
+          return { type: "tool_call", toolCallId: newId(), toolName: "commas_get_dispute", input: { id: disputeId } };
+        }
+
+        const disputeResult = toolHistory.find((t) => t.toolName === "commas_get_dispute")?.result;
+        const disputeData = disputeResult?.ok ? (disputeResult.data as { dispute: DisputeShape }).dispute : undefined;
+
+        // "Has this customer purchased from us before?" — needs the customer email above, so it
+        // naturally waits for commas_get_dispute before pulling their transaction history.
+        if (/purchas|bought\b|order(ed)?\b|customer.*(history|before)|before.*custom/.test(p) && hasTool("fanbasis_list_transactions")) {
+          if (disputeData && !calledNames.includes("fanbasis_list_transactions")) {
+            return {
+              type: "tool_call",
+              toolCallId: newId(),
+              toolName: "fanbasis_list_transactions",
+              input: { customer_email: disputeData.customerEmail },
+            };
+          }
+          if (calledNames.includes("fanbasis_list_transactions")) {
+            return this.finalize(toolHistory.find((t) => t.toolName === "fanbasis_list_transactions")!);
+          }
+        }
+
+        const disputeIntent = detectDisputeIntent(p);
+        if (disputeIntent === "communications" && hasTool("gmail_search_threads") && !calledNames.includes("gmail_search_threads")) {
+          return {
+            type: "tool_call",
+            toolCallId: newId(),
+            toolName: "gmail_search_threads",
+            input: { with_email: disputeData?.customerEmail ?? "" },
+          };
+        }
+        if (disputeIntent) {
+          return this.answerDisputeIntent(disputeIntent, toolHistory, disputeId, hasTool("gmail_search_threads"));
+        }
+
+        // No specific intent worded — a bare "tell me about dispute #2481" gets a general
+        // overview, the same phrasing finalize()'s own commas_get_dispute branch uses.
+        return this.describeDispute(disputeResult, disputeId);
+      }
+    }
 
     // Demo-script questions in a dispute chat get a short, specific answer grounded in the
     // dispute record — not the full multi-source investigation chain, which stays reserved
@@ -386,6 +463,29 @@ export class StubLlmClient implements LlmClient {
     return {
       type: "final",
       text: `Here's what your connected apps have on **${customerName}**:\n\n${lines.join("\n")}\n\nAsk about any of these and I'll pull the details.`,
+    };
+  }
+
+  /** General "tell me about dispute #X" overview for a GLOBAL chat with no more specific intent
+   * worded — same phrasing as finalize()'s own commas_get_dispute branch below (kept as a
+   * separate small method rather than routed through finalize(), which expects the LAST tool
+   * call to BE commas_get_dispute; that isn't guaranteed here once other tools have run in the
+   * same dispute-focused conversation, e.g. after a transaction-history lookup). */
+  private describeDispute(result: ToolCallRecord["result"] | undefined, disputeId: string): LlmStepResult {
+    if (!result) {
+      return {
+        type: "final",
+        text: `Commas is turned off as a source for this chat, so I can't look up dispute #${disputeId}. Enable it in the sources menu and ask again.`,
+      };
+    }
+    if (!result.ok) {
+      const detail = typeof result.data === "string" ? result.data : "it may not exist";
+      return { type: "final", text: `I couldn't find dispute #${disputeId} — ${detail}.` };
+    }
+    const d = (result.data as { dispute: DisputeShape }).dispute;
+    return {
+      type: "final",
+      text: `**Dispute #${d.id}** — ${d.reason.replace(/_/g, " ")}, ${money(d.amountCents)}, evidence due ${fmtDate(d.evidenceDueAt)}.`,
     };
   }
 
