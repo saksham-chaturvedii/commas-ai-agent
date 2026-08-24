@@ -155,7 +155,8 @@ describe("investigation connected to the UI", () => {
       await vi.advanceTimersByTimeAsync(6000);
     });
 
-    fireEvent.click(screen.getByText("Inspect"));
+    // The source reference chip (not the old "Inspect" text link) opens the source detail.
+    fireEvent.click(screen.getByTitle("Open Fathom source"));
 
     // Real underlying source detail, not just a repeat of the summary already shown.
     expect(screen.getByText("Fathom source view")).toBeInTheDocument();
@@ -163,10 +164,10 @@ describe("investigation connected to the UI", () => {
   });
 });
 
-describe("AI found vs. human verified — evidence already in the case", () => {
+describe("added evidence has no review/approval state", () => {
   // Evidence state is now persisted (audit P1-5), so localStorage must be reset between tests
   // here just like every other test file that renders ChatStoreProvider — otherwise one test's
-  // evidence/verification state leaks into the next via the real persistence path.
+  // evidence state leaks into the next via the real persistence path.
   beforeEach(() => localStorage.clear());
   afterEach(() => {
     cleanup();
@@ -180,13 +181,12 @@ describe("AI found vs. human verified — evidence already in the case", () => {
     sourceLabel: "Fathom",
     category: "Access & activity records",
     files: [],
-    verifiedByHuman: false,
   };
 
   /** Seeds one evidence item through the real store (addEvidenceItem) and renders DisputeDetail
    * reading that same store state — evidenceItems is a prop in the real app too (App.tsx passes
-   * evidenceByDispute[disputeId]), so this mirrors how a "Mark as reviewed" click would actually
-   * flow through to a re-render, rather than a static array the click can't affect. */
+   * evidenceByDispute[disputeId]), so this exercises the real add-then-render path, not a
+   * static array a click can't affect. */
   function EvidenceHarness({ item }: { item: AIEvidenceItem }) {
     const { evidenceByDispute, addEvidenceItem } = useChatStore();
     useEffect(() => {
@@ -204,7 +204,7 @@ describe("AI found vs. human verified — evidence already in the case", () => {
     );
   }
 
-  it("labels AI-found evidence distinctly from human-verified, and never marks it verified without an explicit click", () => {
+  it("never shows an 'AI found'/'Reviewed' badge or a 'Mark as reviewed' action, for AI-found or seller-added evidence alike", () => {
     const aiItem: AIEvidenceItem = { ...baseItem, id: "ai-evidence-1", addedBy: "ai" };
     render(
       <ChatStoreProvider>
@@ -214,33 +214,19 @@ describe("AI found vs. human verified — evidence already in the case", () => {
 
     // Categories start collapsed (accordion) — expand this one to see its items.
     fireEvent.click(screen.getByText("Access & activity records"));
-
-    expect(screen.getByText("AI found")).toBeInTheDocument();
+    expect(screen.getByText(aiItem.title)).toBeInTheDocument();
+    expect(screen.queryByText("AI found")).not.toBeInTheDocument();
     expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
 
-    // "Mark as reviewed" now lives in the Evidence Detail drawer, opened by clicking the entry.
+    // Added evidence is active immediately: the row's own menu offers only Edit/Delete.
+    fireEvent.click(screen.getByLabelText("Evidence actions"));
+    expect(screen.getByText("Edit")).toBeInTheDocument();
+    expect(screen.getByText("Delete")).toBeInTheDocument();
+    expect(screen.queryByText("Mark as reviewed")).not.toBeInTheDocument();
+
+    // Opening the detail modal itself never shows review UI either.
     fireEvent.click(screen.getByText(aiItem.title));
-    fireEvent.click(screen.getByText("Mark as reviewed"));
-
-    // Both the accordion row and the (still-open) drawer now read "Reviewed" — the drawer reads
-    // the live item by id, not a stale snapshot.
-    expect(screen.getAllByText("Reviewed").length).toBeGreaterThan(0);
-    expect(screen.queryByText("AI found")).not.toBeInTheDocument();
-  });
-
-  it("never shows an AI-found/human-verified badge on evidence the seller added manually themselves", () => {
-    const sellerItem: AIEvidenceItem = { ...baseItem, id: "seller-1", addedBy: "seller" };
-    render(
-      <ChatStoreProvider>
-        <EvidenceHarness item={sellerItem} />
-      </ChatStoreProvider>,
-    );
-
-    fireEvent.click(screen.getByText("Access & activity records"));
-    expect(screen.queryByText("AI found")).not.toBeInTheDocument();
-    expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByText(sellerItem.title));
+    expect(screen.getByText("Evidence detail")).toBeInTheDocument();
     expect(screen.queryByText("AI found")).not.toBeInTheDocument();
     expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
     expect(screen.queryByText("Mark as reviewed")).not.toBeInTheDocument();

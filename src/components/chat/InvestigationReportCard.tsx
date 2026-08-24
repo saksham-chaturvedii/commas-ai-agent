@@ -1,9 +1,9 @@
-import { useState, type ReactNode } from "react";
-import { AlertTriangle, Search } from "lucide-react";
+import type { ReactNode } from "react";
+import { AlertTriangle } from "lucide-react";
 import type { InvestigationReport } from "../../lib/types";
 import { Badge } from "../shell/Badge";
 import { SourceIcon } from "./SourceIcon";
-import { EvidenceInspectorModal, type InspectableEvidence } from "./EvidenceInspectorModal";
+import { SourceReferenceList } from "./SourceReferenceList";
 
 const STRENGTH_VARIANT: Record<string, "success" | "warning" | "danger" | "neutral" | "info"> = {
   Strong: "success",
@@ -22,8 +22,6 @@ const STRENGTH_VARIANT: Record<string, "success" | "warning" | "danger" | "neutr
  * where "approve"/"reject" actually live.
  */
 export function InvestigationReportCard({ report }: { report: InvestigationReport }) {
-  const [inspecting, setInspecting] = useState<InspectableEvidence | null>(null);
-
   return (
     <div className="content-card max-w-[560px]" style={{ padding: 20, gap: 16 }}>
       <div className="flex items-start justify-between gap-3">
@@ -52,23 +50,14 @@ export function InvestigationReportCard({ report }: { report: InvestigationRepor
                   </div>
                   <div className="text-[11px] text-[#9ca3af] mt-0.5">{item.category}</div>
                   <p className="text-[12px] leading-[17px] text-[#6b7280] mt-1">{item.record}</p>
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 mt-1.5 text-[12px] font-medium text-[var(--color-agent-accent)] cursor-pointer"
-                    onClick={() =>
-                      setInspecting({
-                        title: item.title,
-                        category: item.category,
-                        record: item.record,
-                        sourceLabel: item.sourceLabel,
-                        sourceId: item.sourceId,
-                        raw: item.raw,
-                      })
-                    }
-                  >
-                    <Search size={12} strokeWidth={2} />
-                    Inspect
-                  </button>
+                  <div className="mt-1.5">
+                    <SourceReferenceList
+                      sources={[{ sourceId: item.sourceId, raw: item.raw }]}
+                      title={item.title}
+                      category={item.category}
+                      record={item.record}
+                    />
+                  </div>
                 </div>
               </li>
             ))}
@@ -109,8 +98,6 @@ export function InvestigationReportCard({ report }: { report: InvestigationRepor
         <div className="text-[11px] font-semibold uppercase tracking-wide text-[#9ca3af] mb-0.5">Case strength</div>
         <p className="text-[12.5px] leading-[18px] text-[#6b7280]">{report.caseStrength.explanation}</p>
       </div>
-
-      {inspecting && <EvidenceInspectorModal evidence={inspecting} onClose={() => setInspecting(null)} />}
     </div>
   );
 }

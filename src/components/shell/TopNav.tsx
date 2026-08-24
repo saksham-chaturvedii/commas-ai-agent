@@ -20,7 +20,7 @@ export function TopNav() {
         <span className="flex items-center justify-center w-7 h-7 rounded-lg bg-[#3d2530] shrink-0">
           <CommaMark size={14} color="#e8a0b0" />
         </span>
-        <span className="text-[15px] text-[#111111] font-semibold">makemorecommas</span>
+        <span className="text-[15px] text-[#111111] font-semibold">addmorecommas</span>
         <ChevronDown size={16} strokeWidth={2} className="text-[#6b7280] shrink-0" />
       </button>
 

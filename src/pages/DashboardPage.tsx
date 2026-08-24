@@ -27,7 +27,7 @@ export function DashboardPage() {
         className="pl-[5px] text-[20px] leading-[26px] font-semibold tracking-[-0.4px] text-[#1a1a1a]"
         style={{ fontFamily: "var(--font-heading)" }}
       >
-        Welcome back, makemorecommas
+        Welcome back, addmorecommas
       </h1>
 
       <div className="flex gap-4 mt-5 items-stretch flex-wrap">

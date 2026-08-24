@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   CircleHelp,
@@ -8,6 +8,8 @@ import {
   ChevronDown,
   FileText,
   Image as ImageIcon,
+  MoreVertical,
+  Pencil,
   Receipt,
   Sparkles,
   Check,
@@ -21,8 +23,6 @@ import { EvidenceDetailDrawer } from "./EvidenceDetailDrawer";
 import { evidenceCategories, getDispute, type AIEvidenceItem, type EvidenceFileMeta } from "../../lib/disputeData";
 import { formatFileSize } from "../../lib/evidenceUpload";
 import { useChatStore } from "../../hooks/useChatStore";
-import { sourceIdFromLabel } from "../../lib/mockData";
-import { EvidenceInspectorModal, type InspectableEvidence } from "../chat/EvidenceInspectorModal";
 
 /**
  * Dispute Detail page, ported from commas-ai-copilot and evolved: the old prototype's inline
@@ -92,6 +92,71 @@ function AttachmentPreviewOverlay({ file, onClose }: { file: EvidenceFileMeta; o
   );
 }
 
+/** Contextual "..." menu on each evidence entry — Edit and Delete are the only two management
+ * actions an added item needs (docs/active-context.md — evidence is active case evidence
+ * immediately, no review/approval step on top of that). Closes on an outside click. */
+function EvidenceRowMenu({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  return (
+    <div className="relative shrink-0" ref={ref}>
+      <button
+        type="button"
+        aria-label="Evidence actions"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        className="flex items-center justify-center w-6 h-6 rounded-md text-[#9ca3af] hover:bg-black/[0.06] hover:text-[#1a1a1a] cursor-pointer"
+      >
+        <MoreVertical size={14} strokeWidth={1.75} />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-7 z-10 w-36 py-1 rounded-lg bg-white border border-[#ebebeb] shadow-[0_4px_16px_rgba(0,0,0,0.12)]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onEdit();
+            }}
+            className="w-full text-left px-3 py-1.5 text-[12.5px] text-[#1a1a1a] hover:bg-[#fafafa] cursor-pointer flex items-center gap-2"
+          >
+            <Pencil size={12} strokeWidth={1.75} />
+            Edit
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onDelete();
+            }}
+            className="w-full text-left px-3 py-1.5 text-[12.5px] text-[var(--color-danger-text)] hover:bg-[#fdecee] cursor-pointer flex items-center gap-2"
+          >
+            <Trash2 size={12} strokeWidth={1.75} />
+            Delete
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DetailRow({
   icon: Icon,
   label,
@@ -130,15 +195,16 @@ function ManualEvidenceCard({
   const [modalFor, setModalFor] = useState<string | null>(null);
   const [justAdded, setJustAdded] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<EvidenceFileMeta | null>(null);
-  const [inspecting, setInspecting] = useState<InspectableEvidence | null>(null);
   // Accordion state: which category rows are expanded — starts empty (every category collapsed)
   // so the checklist reads as a scannable list of categories first, detail only on request.
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
-  // The drawer holds an id, not a snapshot of the item — so an edit or "mark as reviewed" made
-  // while it's open is reflected immediately (the live item is looked up from `evidenceItems`
-  // below), instead of the drawer showing stale data until it's reopened.
+  // The modal holds an id, not a snapshot of the item — so an edit made while it's open is
+  // reflected immediately (the live item is looked up from `evidenceItems` below), instead of
+  // showing stale data until it's reopened. `selectedItemStartsInEdit` is set only when opened
+  // via the row menu's "Edit" action (a row click opens in view mode).
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
-  const { verifyEvidenceItem, updateEvidenceItem, confirmEvidenceProof, removeEvidenceItem } = useChatStore();
+  const [selectedItemStartsInEdit, setSelectedItemStartsInEdit] = useState(false);
+  const { updateEvidenceItem, removeEvidenceItem } = useChatStore();
 
   const itemsByCategory = new Map<string, AIEvidenceItem[]>();
   for (const item of evidenceItems) {
@@ -168,6 +234,17 @@ function ManualEvidenceCard({
       else next.add(label);
       return next;
     });
+  };
+
+  const deleteItem = (target: AIEvidenceItem) => {
+    const confirmMessage =
+      target.files.length > 1
+        ? `Remove "${target.title}"? This permanently deletes this evidence entry and its ${target.files.length} attached files.`
+        : `Remove "${target.title}"? This permanently deletes this evidence entry.`;
+    if (window.confirm(confirmMessage)) {
+      removeEvidenceItem(disputeId, target.id);
+      if (selectedItemId === target.id) setSelectedItemId(null);
+    }
   };
 
   return (
@@ -248,11 +325,15 @@ function ManualEvidenceCard({
                             <div
                               role="button"
                               tabIndex={0}
-                              onClick={() => setSelectedItemId(si.id)}
+                              onClick={() => {
+                                setSelectedItemId(si.id);
+                                setSelectedItemStartsInEdit(false);
+                              }}
                               onKeyDown={(e) => {
                                 if (e.key === "Enter" || e.key === " ") {
                                   e.preventDefault();
                                   setSelectedItemId(si.id);
+                                  setSelectedItemStartsInEdit(false);
                                 }
                               }}
                               className="w-full text-left py-2 px-2.5 rounded-lg bg-[#fafafa] border border-[#ebebeb] hover:border-[#d9d9d9] cursor-pointer transition-colors"
@@ -261,12 +342,6 @@ function ManualEvidenceCard({
                                 <div className="min-w-0 flex-1">
                                   <div className="flex items-center gap-1.5 flex-wrap">
                                     <div className="text-[12.5px] font-medium text-[#1a1a1a]">{si.title}</div>
-                                    {si.addedBy === "ai" &&
-                                      (si.verifiedByHuman ? (
-                                        <Badge variant="success">Reviewed</Badge>
-                                      ) : (
-                                        <Badge variant="info">AI found</Badge>
-                                      ))}
                                     {needsProof && <Badge variant="warning">Proof required</Badge>}
                                   </div>
                                   <div className="text-[11.5px] text-[#9ca3af] mt-0.5">
@@ -286,22 +361,13 @@ function ManualEvidenceCard({
                                   )}
                                 </div>
                                 {!isResolved && (
-                                  <button
-                                    type="button"
-                                    aria-label={`Remove ${si.title}`}
-                                    title="Remove evidence"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      const confirmMessage =
-                                        si.files.length > 1
-                                          ? `Remove "${si.title}"? This permanently deletes this evidence entry and its ${si.files.length} attached files.`
-                                          : `Remove "${si.title}"? This permanently deletes this evidence entry.`;
-                                      if (window.confirm(confirmMessage)) removeEvidenceItem(disputeId, si.id);
+                                  <EvidenceRowMenu
+                                    onEdit={() => {
+                                      setSelectedItemId(si.id);
+                                      setSelectedItemStartsInEdit(true);
                                     }}
-                                    className="flex items-center justify-center w-6 h-6 rounded-md text-[#9ca3af] hover:bg-[#fdecee] hover:text-[var(--color-danger-text)] shrink-0"
-                                  >
-                                    <Trash2 size={13} strokeWidth={1.75} />
-                                  </button>
+                                    onDelete={() => deleteItem(si)}
+                                  />
                                 )}
                               </div>
                             </div>
@@ -323,36 +389,15 @@ function ManualEvidenceCard({
         <AddEvidenceModal category={modalFor} onClose={() => setModalFor(null)} onAdd={handleAdd} />
       )}
       {previewFile && <AttachmentPreviewOverlay file={previewFile} onClose={() => setPreviewFile(null)} />}
-      {inspecting && <EvidenceInspectorModal evidence={inspecting} onClose={() => setInspecting(null)} />}
       {selectedItem && (
         <EvidenceDetailDrawer
           item={selectedItem}
           editable={!isResolved}
+          startInEditMode={selectedItemStartsInEdit}
           onClose={() => setSelectedItemId(null)}
           onSave={(patch) => updateEvidenceItem(disputeId, selectedItem.id, patch)}
           onPreviewFile={setPreviewFile}
-          onMarkReviewed={
-            selectedItem.addedBy === "ai" && !selectedItem.verifiedByHuman && !isResolved
-              ? () => verifyEvidenceItem(disputeId, selectedItem.id)
-              : undefined
-          }
-          onInspectSource={
-            selectedItem.addedBy === "ai"
-              ? () =>
-                  setInspecting({
-                    title: selectedItem.title,
-                    category: selectedItem.category,
-                    record: selectedItem.record,
-                    sourceLabel: selectedItem.sourceLabel,
-                    sourceId: sourceIdFromLabel(selectedItem.sourceLabel),
-                  })
-              : undefined
-          }
-          onConfirmProof={(files) => confirmEvidenceProof(disputeId, selectedItem.id, files)}
-          onRemove={() => {
-            removeEvidenceItem(disputeId, selectedItem.id);
-            setSelectedItemId(null);
-          }}
+          onRemove={() => deleteItem(selectedItem)}
         />
       )}
     </div>

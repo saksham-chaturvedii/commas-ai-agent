@@ -1,4 +1,4 @@
-import type { Chat, CreditsState, PageContext, SourceInfo, SuggestedCapability } from "./types";
+import type { Chat, CreditsState, EvidenceSourceRef, PageContext, SourceInfo, SuggestedCapability } from "./types";
 import { getDispute, type AIEvidenceItem } from "./disputeData";
 
 /**
@@ -71,6 +71,28 @@ export function sourceIdFromLabel(label: string): SourceInfo["id"] {
  * are exempt. */
 export function isThirdPartyEvidenceSource(sourceLabel: string): boolean {
   return sourceIdFromLabel(sourceLabel) !== "commas";
+}
+
+/** Strict version of `sourceIdFromLabel` — `undefined` (not a "commas" fallback) when the label
+ * doesn't genuinely name a known connector, e.g. "Added by you → Product description" (a
+ * seller's own manual entry, which was never sourced from any connected app). Used specifically
+ * to decide whether an evidence item has a real source to show a reference chip for at all. */
+function matchSourceIdFromLabel(label: string): SourceInfo["id"] | undefined {
+  return SOURCES.find((s) => label === s.name || label.startsWith(`${s.name} `) || label.startsWith(`${s.name} —`))?.id;
+}
+
+/** The source(s) that actually contributed to one evidence item, for the source-reference chips
+ * (SourceReferenceList.tsx) — the one place that decides what to render, so every caller (the
+ * evidence detail modal, the investigation report card, …) agrees on the exact same mapping.
+ * Prefers the item's own structured `sources` (real per-connector data, when the stub or a
+ * future richer flow attached it); falls back to deriving a single reference from `sourceLabel`
+ * for anything that doesn't have one yet (a real-model-proposed item, older persisted data).
+ * Returns an empty array — no chip at all — when the label doesn't name a real connector (a
+ * seller's manual entry), rather than guessing "commas". */
+export function deriveEvidenceSourceRefs(item: { sources?: EvidenceSourceRef[]; sourceLabel: string }): EvidenceSourceRef[] {
+  if (item.sources && item.sources.length > 0) return item.sources;
+  const sourceId = matchSourceIdFromLabel(item.sourceLabel);
+  return sourceId ? [{ sourceId }] : [];
 }
 
 /** Default per-chat scope: every currently connected source. */

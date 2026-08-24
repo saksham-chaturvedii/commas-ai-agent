@@ -17,6 +17,7 @@ import {
   INITIAL_CREDITS,
   isThirdPartyEvidenceSource,
   SEED_CHATS,
+  sourceIdFromLabel,
   SOURCES,
 } from "../lib/mockData";
 import { DISPUTES, disputesNeedingAttention, type AIEvidenceItem, type EvidenceFileMeta, type EvidenceSourceType } from "../lib/disputeData";
@@ -201,19 +202,13 @@ interface ChatStoreValue {
    * about a dispute's visible evidence lives anywhere else. */
   evidenceByDispute: Record<string, AIEvidenceItem[]>;
   addEvidenceItem: (disputeId: string, item: AIEvidenceItem) => void;
-  /** Marks one AI-found evidence item as human-verified — the only setter for
-   * `AIEvidenceItem.verifiedByHuman`, called only from an explicit "Mark as verified" click. */
-  verifyEvidenceItem: (disputeId: string, itemId: string) => void;
-  /** Edits an existing evidence item's title/record (description) — the Evidence Detail
-   * drawer's only mutation, available only while the dispute is still active (the drawer itself
-   * enforces that; this setter has no opinion on dispute status). */
-  updateEvidenceItem: (disputeId: string, itemId: string, patch: { title: string; record: string }) => void;
-  /** Attaches supporting proof files to a third-party-sourced evidence item and marks it
-   * `proofConfirmed` — the only way a `proofRequired` item moves from "AI found, awaiting
-   * proof" to fully added. Requires at least one file; a no-op otherwise (the drawer's own
-   * "Confirm evidence" button is disabled until then, so this is a second line of defense, not
-   * the only one). */
-  confirmEvidenceProof: (disputeId: string, itemId: string, files: EvidenceFileMeta[]) => void;
+  /** Edits an existing evidence item — title, record, and its full attachment set — the
+   * Evidence Detail modal's one Save action, available only while the dispute is still active
+   * (the modal itself enforces that; this setter has no opinion on dispute status). Also the
+   * only way a `proofRequired` item moves to `proofConfirmed`: that flips to true here whenever
+   * the saved `files` list is non-empty (or the item never required proof to begin with) — there
+   * is no separate "confirm" step, editing an item and saving IS confirming it. */
+  updateEvidenceItem: (disputeId: string, itemId: string, patch: { title: string; record: string; files: EvidenceFileMeta[] }) => void;
   /** Permanently removes one evidence entry (and its attachments) from a dispute's checklist —
    * "Added" is never a locked state while the dispute is still active. Works identically for
    * AI-found, manual, Commas-native, and proof-confirmed third-party items; the category-level
@@ -738,31 +733,17 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     setEvidenceByDispute((prev) => ({ ...prev, [disputeId]: [...(prev[disputeId] ?? []), item] }));
   }, []);
 
-  /** The ONLY place `verifiedByHuman` is ever set to true — a deliberate, explicit click on the
-   * evidence checklist itself (DisputeDetail.tsx), never a side effect of approving a proposal
-   * or anything else automatic. "Do not claim evidence is verified by the human unless the
-   * human has actually reviewed it." */
-  const verifyEvidenceItem = useCallback((disputeId: string, itemId: string) => {
-    setEvidenceByDispute((prev) => ({
-      ...prev,
-      [disputeId]: (prev[disputeId] ?? []).map((item) => (item.id === itemId ? { ...item, verifiedByHuman: true } : item)),
-    }));
-  }, []);
-
-  const updateEvidenceItem = useCallback((disputeId: string, itemId: string, patch: { title: string; record: string }) => {
-    setEvidenceByDispute((prev) => ({
-      ...prev,
-      [disputeId]: (prev[disputeId] ?? []).map((item) => (item.id === itemId ? { ...item, ...patch } : item)),
-    }));
-  }, []);
-
-  const confirmEvidenceProof = useCallback((disputeId: string, itemId: string, files: EvidenceFileMeta[]) => {
-    if (files.length === 0) return;
-    setEvidenceByDispute((prev) => ({
-      ...prev,
-      [disputeId]: (prev[disputeId] ?? []).map((item) => (item.id === itemId ? { ...item, files, proofConfirmed: true } : item)),
-    }));
-  }, []);
+  const updateEvidenceItem = useCallback(
+    (disputeId: string, itemId: string, patch: { title: string; record: string; files: EvidenceFileMeta[] }) => {
+      setEvidenceByDispute((prev) => ({
+        ...prev,
+        [disputeId]: (prev[disputeId] ?? []).map((item) =>
+          item.id === itemId ? { ...item, ...patch, proofConfirmed: !item.proofRequired || patch.files.length > 0 } : item,
+        ),
+      }));
+    },
+    [],
+  );
 
   const removeEvidenceItem = useCallback((disputeId: string, itemId: string) => {
     setEvidenceByDispute((prev) => ({
@@ -819,12 +800,13 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
               addedBy: "ai",
               category: candidate.category,
               files: [],
-              // Approving a proposal means "use this," not "I've checked it's accurate" — never
-              // implicitly verified. Only an explicit "Mark as verified" click (verifyEvidenceItem)
-              // sets this.
-              verifiedByHuman: false,
               proofRequired,
               proofConfirmed: !proofRequired,
+              // The stub attaches real per-connector data directly (bypassing the tool schema a
+              // real model is constrained to — see server/agent/actions/index.ts); a real
+              // model's own candidate has no `sources`, so fall back to a single-source list
+              // derived from the label it did provide.
+              sources: candidate.sources ?? [{ sourceId: sourceIdFromLabel(candidate.sourceLabel) }],
             });
           }
         } else if (action.type === "draft_response") {
@@ -945,9 +927,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       markedReadyDisputeIds,
       evidenceByDispute,
       addEvidenceItem,
-      verifyEvidenceItem,
       updateEvidenceItem,
-      confirmEvidenceProof,
       removeEvidenceItem,
       responseDraftByDispute,
       setResponseDraft,
@@ -977,9 +957,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       markedReadyDisputeIds,
       evidenceByDispute,
       addEvidenceItem,
-      verifyEvidenceItem,
       updateEvidenceItem,
-      confirmEvidenceProof,
       removeEvidenceItem,
       responseDraftByDispute,
       setResponseDraft,

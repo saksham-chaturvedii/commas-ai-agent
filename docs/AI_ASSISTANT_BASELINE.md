@@ -112,7 +112,7 @@ Key facts:
 | `chatPageActiveId` | `string \| null` | which chat the full Chat page shows |
 | `panelOpen`, `panelChatId` | | right-side AI panel binding |
 
-Layout (ported from `commas-ai-copilot`): `.app-shell-bg` gradient frame → `Sidebar` (48px glass icon rail: Home / Billing / Growth / Wallet / Resolution Center / **Chat**, app tiles, settings, account) + column of `TopNav` (glass org pill "makemorecommas", Sparkles "Search apps…" field, +/settings/help/bell icons, black "Finish setup" pill) and a `flex` row of the page `main-surface` plus, when open, the `RightPanel` as a **sibling** `main-surface` column (380px; overlays as `fixed` below the `lg` breakpoint). `FloatingAIButton` (bottom-right, `AgentMark`) renders on every non-Chat view while the panel is closed.
+Layout (ported from `commas-ai-copilot`): `.app-shell-bg` gradient frame → `Sidebar` (48px glass icon rail: Home / Billing / Growth / Wallet / Resolution Center / **Chat**, app tiles, settings, account) + column of `TopNav` (glass org pill "addmorecommas", Sparkles "Search apps…" field, +/settings/help/bell icons, black "Finish setup" pill) and a `flex` row of the page `main-surface` plus, when open, the `RightPanel` as a **sibling** `main-surface` column (380px; overlays as `fixed` below the `lg` breakpoint). `FloatingAIButton` (bottom-right, `AgentMark`) renders on every non-Chat view while the panel is closed.
 
 Panel-context rules enforced in `App.tsx`:
 - `openPanel(context?)`: with a context → find or create the chat whose `context.kind/id` matches; without → reuse the previous panel chat only if it is context-less, else create a general chat (audit P1-3).

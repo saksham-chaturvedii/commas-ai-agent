@@ -428,6 +428,7 @@ export class StubLlmClient implements LlmClient {
         record: `A recorded ${calls[0].durationMinutes}-minute call with ${d.customerName} on Fathom.`,
         sourceType: "activity",
         sourceLabel: "Fathom",
+        sources: [{ sourceId: "fathom", raw: calls[0] as unknown as Record<string, unknown> }],
       });
     }
 
@@ -444,6 +445,7 @@ export class StubLlmClient implements LlmClient {
         record: d.communicationsSummary,
         sourceType: "communication",
         sourceLabel: "Gmail",
+        sources: [{ sourceId: "gmail", raw: gmailThreads[0] as Record<string, unknown> }],
       });
     }
 

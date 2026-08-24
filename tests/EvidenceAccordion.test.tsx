@@ -48,7 +48,6 @@ const aiItem: AIEvidenceItem = {
     { name: "log-1.pdf", type: "application/pdf", size: 1000, mockUrl: "mock://log-1.pdf" },
     { name: "log-2.png", type: "image/png", size: 2000, mockUrl: "mock://log-2.png" },
   ],
-  verifiedByHuman: false,
 };
 
 describe("Evidence checklist accordion", () => {
@@ -122,7 +121,7 @@ describe("Evidence checklist accordion", () => {
     expect(screen.queryByText("Portal access log")).not.toBeInTheDocument();
   });
 
-  it("marking an item reviewed from the drawer is reflected live, without needing to reopen it", () => {
+  it("added evidence is active immediately — no 'AI found' badge, no review step, just Edit/Delete via the row menu", () => {
     render(
       <ChatStoreProvider>
         <Harness disputeId="2481" seedItem={aiItem} />
@@ -130,17 +129,20 @@ describe("Evidence checklist accordion", () => {
     );
 
     fireEvent.click(screen.getByText("Access & activity records"));
-    fireEvent.click(screen.getByText("Portal access log"));
-    // "AI found" shows on both the accordion row (still visible behind the drawer) and the
-    // drawer's own header badge.
-    expect(screen.getAllByText("AI found").length).toBeGreaterThan(0);
-
-    fireEvent.click(screen.getByText("Mark as reviewed"));
-
-    expect(screen.getAllByText("Reviewed").length).toBeGreaterThan(0);
     expect(screen.queryByText("AI found")).not.toBeInTheDocument();
-    // Reviewed items no longer offer "Mark as reviewed" again.
+    expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("Evidence actions"));
+    expect(screen.getByText("Edit")).toBeInTheDocument();
+    expect(screen.getByText("Delete")).toBeInTheDocument();
     expect(screen.queryByText("Mark as reviewed")).not.toBeInTheDocument();
+
+    // Choosing Edit from the menu opens the modal straight into edit mode (a Save button, not
+    // an Edit button, is already showing).
+    fireEvent.click(screen.getByText("Edit"));
+    expect(screen.getByText("Evidence detail")).toBeInTheDocument();
+    expect(screen.getByText("Save")).toBeInTheDocument();
+    expect(screen.queryByText("AI found")).not.toBeInTheDocument();
   });
 
   it("a resolved dispute shows evidence read-only: no Add evidence, no Edit, no Mark as reviewed", () => {

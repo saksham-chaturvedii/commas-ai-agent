@@ -7,6 +7,7 @@
  * this file only holds what the Resolution Center UI itself renders, kept in sync by hand
  * (same ids, amounts, reasons, dates) with the backend record for each case.
  */
+import type { EvidenceSourceRef } from "./types";
 
 export type DisputeStatus = "Needs response" | "Won";
 
@@ -335,12 +336,6 @@ export type AIEvidenceItem = {
    * lets the Resolution Center group/display session-added items per row without a redesign. */
   category: string;
   files: EvidenceFileMeta[];
-  /** True only once a human has explicitly clicked "Mark as verified" on this specific item
-   * (DisputeDetail.tsx) — never set automatically, and never implied just because the seller
-   * approved adding it to the case (approving is "use this," not "I've checked it's accurate").
-   * Undefined/false render identically ("AI found" — unverified); only `addedBy === "ai"` items
-   * show either badge at all, since a seller-uploaded item was never an AI claim to verify. */
-  verifiedByHuman?: boolean;
   /** True when this item was sourced from a third-party connected app (Fathom, Gmail, Zoom,
    * GoHighLevel/CRM, …) rather than Commas' own first-party record — such evidence needs the
    * seller's own supporting proof before it counts as fully added, since the seller is relying
@@ -348,11 +343,16 @@ export type AIEvidenceItem = {
    * Commas-sourced AI evidence or seller-added manual items (both already have — or ARE — their
    * own proof). Set once, at creation (useChatStore's `resolveProposedAction`); never changes. */
   proofRequired?: boolean;
-  /** Set once the seller has attached at least one proof file and explicitly confirmed. Always
-   * true for items where `proofRequired` is falsy (nothing to confirm). While `proofRequired &&
-   * !proofConfirmed`, the item is "AI found — proof required": visible in the checklist, but not
-   * counted toward a category's "Added" state until confirmed. */
+  /** Set once the seller has attached at least one proof file and saved. Always true for items
+   * where `proofRequired` is falsy (nothing to confirm). While `proofRequired && !proofConfirmed`,
+   * the item is "proof required": visible in the checklist, but not counted toward a category's
+   * "Added" state until confirmed. */
   proofConfirmed?: boolean;
+  /** Which connector(s) actually contributed to this item — drives the source-reference chips
+   * (SourceReferenceList.tsx). Falls back to a single-source list derived from `sourceLabel`
+   * (mockData.ts's `deriveEvidenceSourceRefs`) when absent, so every item — old or new — always
+   * has something to render. */
+  sources?: EvidenceSourceRef[];
 };
 
 export const evidenceCategories = [

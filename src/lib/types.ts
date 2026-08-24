@@ -85,12 +85,30 @@ export type ProposedActionStatus = "pending" | "approved" | "declined";
  * `EvidenceSourceType` (kept as a plain string on the wire so the server doesn't need to import
  * a frontend type — narrowed back to `EvidenceSourceType` only at the point of actually
  * constructing an `AIEvidenceItem`, in useChatStore's `resolveProposedAction`). */
+/** One connector that actually contributed to a piece of evidence — the data-driven unit the
+ * source-reference chips (SourceReferenceList.tsx) render from, one chip per entry. Deliberately
+ * NOT keyed by connector name (never "if sourceLabel === 'Fathom'" anywhere downstream): the
+ * chip's icon/label always comes from the shared connector registry (SOURCES in mockData.ts +
+ * SourceIcon.tsx) looked up by `sourceId`, so a new connector added to that registry gets the
+ * chip UI for free. `raw` is the underlying source record (a Fathom call, a Gmail thread, …)
+ * when available — a source without one still renders a chip, just with nothing to inspect. */
+export interface EvidenceSourceRef {
+  sourceId: SourceId;
+  raw?: Record<string, unknown>;
+}
+
 export interface ProposedEvidenceCandidate {
   category: string;
   title: string;
   record: string;
   sourceType: string;
   sourceLabel: string;
+  /** Real per-connector data the STUB attaches directly (bypassing the propose_add_evidence
+   * tool schema, which a real model fills in and can't produce `raw` data for — see
+   * server/agent/actions/index.ts's buildProposedAction, the one place both paths converge).
+   * Absent for a real-model-proposed candidate; useChatStore's resolveProposedAction falls back
+   * to a single-source list derived from `sourceLabel` in that case. */
+  sources?: EvidenceSourceRef[];
 }
 
 export type ProposedAction =

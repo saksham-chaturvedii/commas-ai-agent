@@ -103,12 +103,23 @@ export type AgentErrorCode =
  * added to the case itself; only ever a candidate the seller can approve. `sourceType` mirrors
  * src/lib/disputeData.ts's `EvidenceSourceType` union, kept as a plain string here since server
  * code can't import frontend types. */
+/** One connector that actually contributed to a piece of evidence — mirrors src/lib/types.ts's
+ * identical interface (hand-mirrored, same reason ProposedEvidenceCandidate itself is). */
+export interface EvidenceSourceRef {
+  sourceId: SourceId;
+  raw?: Record<string, unknown>;
+}
+
 export interface ProposedEvidenceCandidate {
   category: string;
   title: string;
   record: string;
   sourceType: string;
   sourceLabel: string;
+  /** Real per-connector data the stub attaches directly when it builds a candidate (see
+   * server/llm/stubClient.ts's buildEvidenceProposal) — absent for a real-model-proposed
+   * candidate, since a model can't produce `raw` tool-result data as output. */
+  sources?: EvidenceSourceRef[];
 }
 
 /** One concrete fact the investigation actually found, grounded in a real tool result —

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { act, render, screen, fireEvent, cleanup, within } from "@testing-library/react";
 import { ChatStoreProvider, useChatStore } from "../src/hooks/useChatStore";
 import { ChatWorkspace } from "../src/components/chat/ChatWorkspace";
 import { DisputeDetail } from "../src/components/resolution/DisputeDetail";
@@ -126,26 +126,26 @@ describe("third-party evidence requires supporting proof", () => {
     await sendAndAwait("find evidence for me");
     fireEvent.click(screen.getByText(/Add selected/));
 
-    // Visible immediately in the checklist — "AI found" + a real signal proof is still needed —
-    // but the category doesn't count it as Added yet.
+    // Visible immediately in the checklist — a real signal proof is still needed — but the
+    // category doesn't count it as Added yet.
     fireEvent.click(screen.getByText("Customer communications"));
     expect(screen.getByText("Customer correspondence")).toBeInTheDocument();
     expect(screen.getByText("Proof required")).toBeInTheDocument();
     expect(screen.getByText("0 of 6 items added")).toBeInTheDocument();
 
+    // A proof-required item opens straight into edit mode — nothing useful to view without proof.
     fireEvent.click(screen.getByText("Customer correspondence"));
-    expect(screen.getByText("Supporting proof required")).toBeInTheDocument();
-    expect(screen.getByText(/found in Gmail, an external app/)).toBeInTheDocument();
-    // Nothing to confirm yet.
-    expect(screen.getByText("Confirm evidence")).toHaveProperty("disabled", true);
+    expect(screen.getByText(/Supporting proof is required for evidence from external sources/)).toBeInTheDocument();
+    // Nothing to save yet.
+    expect(screen.getByText("Save")).toHaveProperty("disabled", true);
 
     selectFiles([makeFile("gmail-screenshot.png", 2048, "image/png")]);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1200);
     });
-    expect(screen.getByText("Confirm evidence")).toHaveProperty("disabled", false);
+    expect(screen.getByText("Save")).toHaveProperty("disabled", false);
 
-    fireEvent.click(screen.getByText("Confirm evidence"));
+    fireEvent.click(screen.getByText("Save"));
 
     // Now fully added: the proof-required badge and upload UI are gone, replaced by the normal
     // attachments view, and the category counts it.
@@ -171,13 +171,13 @@ describe("third-party evidence requires supporting proof", () => {
     expect(screen.getByText("Proof required")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("Fathom call — 42-minute session"));
-    expect(screen.getByText(/found in Fathom, an external app/)).toBeInTheDocument();
+    expect(screen.getByText(/Supporting proof is required for evidence from external sources/)).toBeInTheDocument();
 
     selectFiles([makeFile("call-recording-screenshot.png", 3000, "image/png")]);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1200);
     });
-    fireEvent.click(screen.getByText("Confirm evidence"));
+    fireEvent.click(screen.getByText("Save"));
 
     expect(screen.getByText("1 of 6 items added")).toBeInTheDocument();
   });
@@ -203,7 +203,7 @@ describe("third-party evidence requires supporting proof", () => {
     expect(screen.getByText("Transaction record")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("Transaction record"));
-    expect(screen.queryByText("Supporting proof required")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Supporting proof is required/)).not.toBeInTheDocument();
     expect(screen.getByText("Attachments")).toBeInTheDocument();
   });
 
@@ -223,12 +223,12 @@ describe("third-party evidence requires supporting proof", () => {
     fireEvent.click(screen.getByText("Customer communications"));
     fireEvent.click(screen.getByText("Customer correspondence"));
 
-    const confirmButton = screen.getByText("Confirm evidence");
-    expect(confirmButton).toHaveProperty("disabled", true);
-    fireEvent.click(confirmButton);
+    const saveButton = screen.getByText("Save");
+    expect(saveButton).toHaveProperty("disabled", true);
+    fireEvent.click(saveButton);
 
     // Still not added — clicking a disabled button is a no-op, and the explanation is visible.
-    expect(screen.getByText(/attach a screenshot or file from it before this counts as/)).toBeInTheDocument();
+    expect(screen.getByText(/Supporting proof is required for evidence from external sources/)).toBeInTheDocument();
     expect(screen.getByText("0 of 6 items added")).toBeInTheDocument();
   });
 
@@ -252,7 +252,7 @@ describe("third-party evidence requires supporting proof", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1200);
     });
-    fireEvent.click(screen.getByText("Confirm evidence"));
+    fireEvent.click(screen.getByText("Save"));
 
     // Both files present, both usable (rendered as clickable attachment chips) after confirming.
     expect(screen.getAllByText("zoom-screenshot-1.png").length).toBeGreaterThan(0);
@@ -307,7 +307,8 @@ describe("removing added evidence", () => {
 
     fireEvent.click(screen.getByText("Transaction & payment details"));
     vi.spyOn(window, "confirm").mockReturnValue(true);
-    fireEvent.click(screen.getByLabelText("Remove Transaction record"));
+    fireEvent.click(screen.getByLabelText("Evidence actions"));
+    fireEvent.click(screen.getByText("Delete"));
 
     expect(screen.getByText("0 of 6 items added")).toBeInTheDocument();
     expect(screen.queryByText("Transaction record")).not.toBeInTheDocument();
@@ -331,7 +332,9 @@ describe("removing added evidence", () => {
     expect(screen.getByText("1 of 6 items added")).toBeInTheDocument();
 
     vi.spyOn(window, "confirm").mockReturnValue(true);
-    fireEvent.click(screen.getByLabelText("Remove Fathom call"));
+    const fathomRow = screen.getByText("Fathom call").closest('[role="button"]') as HTMLElement;
+    fireEvent.click(within(fathomRow).getByLabelText("Evidence actions"));
+    fireEvent.click(within(fathomRow).getByText("Delete"));
 
     expect(screen.queryByText("Fathom call")).not.toBeInTheDocument();
     expect(screen.getByText("Zoom attendance")).toBeInTheDocument();
@@ -354,7 +357,8 @@ describe("removing added evidence", () => {
 
     fireEvent.click(screen.getByText("Transaction & payment details"));
     vi.spyOn(window, "confirm").mockReturnValue(false);
-    fireEvent.click(screen.getByLabelText("Remove Transaction record"));
+    fireEvent.click(screen.getByLabelText("Evidence actions"));
+    fireEvent.click(screen.getByText("Delete"));
 
     expect(screen.getByText("Transaction record")).toBeInTheDocument();
     expect(screen.getByText("1 of 6 items added")).toBeInTheDocument();

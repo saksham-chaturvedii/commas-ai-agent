@@ -20,7 +20,30 @@
  * pattern established for scoping which tools a runtime can see.
  */
 import type { LlmToolDef } from "../../llm/types.js";
-import type { ProposedAction, ProposedEvidenceCandidate } from "../../types.js";
+import type { EvidenceSourceRef, ProposedAction, ProposedEvidenceCandidate, SourceId } from "../../types.js";
+
+/** Every connector the app knows about — used to validate an item's optional `sources` entries
+ * without hardcoding a per-connector check anywhere else. Add a new connector to `SourceId`
+ * (server/types.ts) and here, and this validation covers it automatically. */
+const KNOWN_SOURCE_IDS: readonly SourceId[] = ["commas", "google-calendar", "zoom", "fathom", "gmail", "crm"];
+
+/** Validates an item's optional `sources` field — real per-connector data the stub attaches
+ * directly (server/llm/stubClient.ts's buildEvidenceProposal bypasses the tool schema below,
+ * since a real model can't produce `raw` tool-result data as output). Not part of the
+ * propose_add_evidence tool schema itself for that reason; this only defensively accepts it when
+ * present, so a malformed or absent `sources` never breaks the rest of the item. */
+function parseSources(raw: unknown): EvidenceSourceRef[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const refs: EvidenceSourceRef[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.sourceId !== "string" || !KNOWN_SOURCE_IDS.includes(e.sourceId as SourceId)) continue;
+    const rawRecord = typeof e.raw === "object" && e.raw !== null ? (e.raw as Record<string, unknown>) : undefined;
+    refs.push({ sourceId: e.sourceId as SourceId, raw: rawRecord });
+  }
+  return refs.length > 0 ? refs : undefined;
+}
 
 export const PROPOSE_ADD_EVIDENCE_TOOL: LlmToolDef = {
   name: "propose_add_evidence",
@@ -107,6 +130,7 @@ export function buildProposedAction(disputeId: string, toolName: string, input: 
         record: r.record,
         sourceType: r.sourceType,
         sourceLabel: r.sourceLabel,
+        sources: parseSources(r.sources),
       });
     }
     if (items.length === 0) return undefined;
