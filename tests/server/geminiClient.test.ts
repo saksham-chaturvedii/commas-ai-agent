@@ -134,7 +134,10 @@ describe("GeminiLlmClient", () => {
     });
   });
 
-  it("includes prior tool calls as model/user turn pairs (functionCall + functionResponse)", async () => {
+  it("includes prior tool calls as plain-text model/user turn pairs, not structured functionCall/functionResponse parts", async () => {
+    // Gemini 3.x rejects a replayed functionCall part with no thought_signature attached — see
+    // toolHistoryToContents's doc comment in server/llm/geminiClient.ts for the live-confirmed
+    // failure this sidesteps by using plain text instead.
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "done" }] } }] }), { status: 200 }),
     );
@@ -150,13 +153,14 @@ describe("GeminiLlmClient", () => {
     );
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.contents[0]).toEqual({
-      role: "model",
-      parts: [{ functionCall: { name: "commas_get_dispute", args: { dispute_id: "2481" } } }],
-    });
+    expect(body.contents[0].role).toBe("model");
+    expect(body.contents[0].parts[0]).not.toHaveProperty("functionCall");
+    expect(body.contents[0].parts[0].text).toContain("commas_get_dispute");
+    expect(body.contents[0].parts[0].text).toContain("2481");
     expect(body.contents[1].role).toBe("user");
-    expect(body.contents[1].parts[0].functionResponse.name).toBe("commas_get_dispute");
-    expect(body.contents[1].parts[0].functionResponse.response).toEqual({ ok: true, result: { id: "2481" } });
+    expect(body.contents[1].parts[0]).not.toHaveProperty("functionResponse");
+    expect(body.contents[1].parts[0].text).toContain("commas_get_dispute");
+    expect(body.contents[1].parts[0].text).toContain('"ok":true');
   });
 
   it("classifies a 401/403 response as auth_failed without crashing", async () => {

@@ -87,23 +87,24 @@ interface GeminiGenerateContentResponse {
   promptFeedback?: { blockReason?: string };
 }
 
+/**
+ * Renders already-resolved tool calls as plain text turns rather than Gemini's structured
+ * `functionCall`/`functionResponse` parts. Confirmed live: replaying a `functionCall` part back
+ * to a Gemini 3.x model without a `thought_signature` attached (an opaque continuation token
+ * the model itself must have issued alongside that call) fails with 400 INVALID_ARGUMENT —
+ * `ToolCallRecord` (server/llm/types.ts) has no field for that, and adding one would mean
+ * threading a Gemini-specific opaque token through the shared agent runtime/types every other
+ * provider (Anthropic, the stub) has no use for. Plain text sidesteps the requirement entirely:
+ * the model still sees exactly what was called and what came back, just not as a part type that
+ * demands a signature it never issued to us.
+ */
 function toolHistoryToContents(toolHistory: ToolCallRecord[]) {
   const contents: { role: string; parts: unknown[] }[] = [];
   for (const record of toolHistory) {
-    contents.push({
-      role: "model",
-      parts: [{ functionCall: { name: record.toolName, args: record.input } }],
-    });
+    contents.push({ role: "model", parts: [{ text: `Calling ${record.toolName}(${JSON.stringify(record.input)})` }] });
     contents.push({
       role: "user",
-      parts: [
-        {
-          functionResponse: {
-            name: record.toolName,
-            response: { ok: record.result?.ok ?? true, result: record.result?.data ?? null },
-          },
-        },
-      ],
+      parts: [{ text: `Tool result for ${record.toolName}: ${JSON.stringify({ ok: record.result?.ok ?? true, data: record.result?.data ?? null })}` }],
     });
   }
   return contents;

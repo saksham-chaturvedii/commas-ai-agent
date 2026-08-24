@@ -120,23 +120,16 @@ interface GeminiStreamChunk {
   }[];
 }
 
+/** See server/llm/geminiClient.ts's identical helper for why this is plain text, not
+ * structured functionCall/functionResponse parts (confirmed live: a 400 for a missing
+ * thought_signature ToolCallRecord has no field to carry). */
 function toolHistoryToContents(toolHistory: ToolCallRecord[]) {
   const contents: { role: string; parts: unknown[] }[] = [];
   for (const record of toolHistory) {
-    contents.push({
-      role: "model",
-      parts: [{ functionCall: { name: record.toolName, args: record.input } }],
-    });
+    contents.push({ role: "model", parts: [{ text: `Calling ${record.toolName}(${JSON.stringify(record.input)})` }] });
     contents.push({
       role: "user",
-      parts: [
-        {
-          functionResponse: {
-            name: record.toolName,
-            response: { ok: record.result?.ok ?? true, result: record.result?.data ?? null },
-          },
-        },
-      ],
+      parts: [{ text: `Tool result for ${record.toolName}: ${JSON.stringify({ ok: record.result?.ok ?? true, data: record.result?.data ?? null })}` }],
     });
   }
   return contents;
