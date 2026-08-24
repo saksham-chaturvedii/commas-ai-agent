@@ -23,12 +23,21 @@ export function ChatHistoryList({
 
   // An empty chat only stays visible while it's the active one — createChat() already
   // dedupes so there's at most one, but this keeps a stale empty chat from lingering in the
-  // list if selection moves elsewhere. Context (dispute/dashboard) chats stay out of the
-  // general history, EXCEPT the currently active one: opening a dispute chat "in full Chat
-  // view" must show a highlighted row for the conversation on screen, or it reads as a chat
-  // that exists nowhere (PRODUCT_READINESS_AUDIT.md P1-11).
+  // list if selection moves elsewhere. Dashboard-context chats stay out of the general history
+  // except the currently active one (a deliberate, documented choice — see
+  // docs/AI_ASSISTANT_IMPLEMENTATION_STATUS.md's Phase 8 "Not changed, deliberately"): opening
+  // one "in full Chat view" must still show a highlighted row for the conversation on screen, or
+  // it reads as a chat that exists nowhere (PRODUCT_READINESS_AUDIT.md P1-11). Dispute
+  // investigations, by contrast, now ALWAYS stay listed once they have real messages (audit
+  // P1-7) — they were previously excluded the same way, which meant navigating away and back
+  // made a real investigation unreachable from this list entirely; the existing gavel icon
+  // below already anticipated dispute rows appearing here.
   const standaloneChats = chats
-    .filter((c) => (c.messages.length > 0 || c.id === activeChatId) && (!c.context || c.id === activeChatId))
+    .filter(
+      (c) =>
+        (c.messages.length > 0 || c.id === activeChatId) &&
+        (!c.context || c.id === activeChatId || c.type === "dispute"),
+    )
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
   const groups: Record<string, typeof standaloneChats> = { Today: [], Yesterday: [], Earlier: [] };

@@ -198,7 +198,7 @@ function ManualEvidenceCard({
                         <div className="text-[12.5px] font-medium text-[#1a1a1a]">{si.title}</div>
                         {si.addedBy === "ai" &&
                           (si.verifiedByHuman ? (
-                            <Badge variant="success">Human verified</Badge>
+                            <Badge variant="success">Reviewed</Badge>
                           ) : (
                             <Badge variant="info">AI found</Badge>
                           ))}
@@ -235,7 +235,7 @@ function ManualEvidenceCard({
                               className="text-[12px] font-medium text-[#6b7280] hover:text-[#1a1a1a] cursor-pointer"
                               onClick={() => verifyEvidenceItem(disputeId, si.id)}
                             >
-                              Mark as verified
+                              Mark as reviewed
                             </button>
                           )}
                         </div>

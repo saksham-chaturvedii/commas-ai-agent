@@ -39,15 +39,27 @@ function AppShell() {
     } else {
       // Context-less open (e.g. the floating button on the RC list): never resurface a stale
       // dispute/dashboard-context chat from a previous page — reuse/create a general chat
-      // instead (PRODUCT_READINESS_AUDIT.md P1-3).
+      // instead (PRODUCT_READINESS_AUDIT.md P1-3). Also treat a deleted chat (no longer in
+      // `chats` at all) the same as "no chat" rather than keeping its stale id — otherwise the
+      // panel opens with nothing to show it (audit P1-1).
       const previous = targetId ? chats.find((c) => c.id === targetId) : undefined;
-      if (!targetId || previous?.context) targetId = createChat();
+      if (!targetId || !previous || previous.context) targetId = createChat();
     }
     setPanelChatId(targetId);
     setPanelOpen(true);
   };
 
   const closePanel = () => setPanelOpen(false);
+
+  // If the chat bound to the panel gets deleted while the panel is open (or closed), close the
+  // panel and forget its id — otherwise the floating button stays hidden and the panel renders
+  // nothing on the next open (audit P1-1).
+  useEffect(() => {
+    if (panelChatId && !chats.some((c) => c.id === panelChatId)) {
+      setPanelChatId(null);
+      setPanelOpen(false);
+    }
+  }, [chats, panelChatId]);
 
   // The right panel is scoped to "other pages" (spec §2.5) — the Chat view has its own full
   // conversation surface, so showing the panel there would duplicate the composer/credits and

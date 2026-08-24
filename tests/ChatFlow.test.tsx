@@ -260,6 +260,66 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
     expect(screen.getByText("Done — marked ready.")).toBeInTheDocument();
   });
 
+  it("audit P2-1: declining a write action doesn't charge a credit or read as a failure", async () => {
+    function DisputeHarness() {
+      const { createChat, chats, credits } = useChatStore();
+      const [chatId, setChatId] = useState<string | null>(null);
+      useEffect(() => {
+        setChatId(createChat({ kind: "dispute", id: "2481", label: "Dispute #2481 — Sarah Johnson" }));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []);
+      const chat = chats.find((c: Chat) => c.id === chatId);
+      if (!chat) return null;
+      return (
+        <div>
+          <div data-testid="used-credits">{credits.usedCredits}</div>
+          <ChatWorkspace chat={chat} />
+        </div>
+      );
+    }
+
+    mockFetchOnce({
+      steps: [],
+      answer: "",
+      toolSummary: [],
+      pendingApproval: {
+        toolCallId: "call-1",
+        toolName: "commas_mark_dispute_response_ready",
+        summary: "Mark the evidence response for Dispute #2481 as ready to submit.",
+        input: { dispute_id: "2481" },
+      },
+    });
+
+    render(
+      <ChatStoreProvider>
+        <DisputeHarness />
+      </ChatStoreProvider>,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Ask about your business…"), { target: { value: "mark the response ready" } });
+    fireEvent.keyDown(screen.getByPlaceholderText("Ask about your business…"), { key: "Enter" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    const usedBefore = screen.getByTestId("used-credits").textContent;
+
+    mockFetchOnce({
+      steps: [],
+      answer: "Okay — I won't do that. Let me know if you'd like to try something else.",
+      toolSummary: [{ sourceId: "commas", label: "Mark response ready", ok: false, declined: true }],
+    });
+    fireEvent.click(screen.getByText("Decline"));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(screen.getByText("Okay — I won't do that. Let me know if you'd like to try something else.")).toBeInTheDocument();
+    // No credit was spent on the declined turn — a decline isn't billable work.
+    expect(screen.getByTestId("used-credits").textContent).toBe(usedBefore);
+  });
+
   it("refuses to start a second run while another chat's run is in flight (P1-6)", async () => {
     // A fetch that never resolves keeps the first chat's run active for the whole test.
     const hangingFetch = vi.fn().mockReturnValue(new Promise(() => {}));
@@ -385,7 +445,7 @@ describe("chat flow (wired to the real agent backend over POST /api/agent/run)",
       messages: [{ id: "m-user", role: "user", text: "Summarize my sales", ts: new Date().toISOString() }],
     };
     localStorage.setItem(
-      "commas-ai-agent:v3",
+      "commas-ai-agent:v4",
       JSON.stringify({ chats: [interrupted], sources: [], credits: { totalCredits: 300, usedCredits: 0 } }),
     );
 

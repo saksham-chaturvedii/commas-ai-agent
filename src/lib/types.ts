@@ -49,6 +49,9 @@ export interface ToolSummaryItem {
   ok: boolean;
   /** Same result-aware label as `ProgressStep.doneLabel`. */
   resultLabel?: string;
+  /** True when this entry is a human-declined write action, not a genuine failure (audit
+   * P2-1) — lets the client skip charging credits for a turn that did no billable work. */
+  declined?: boolean;
 }
 
 export interface ChatMessage {

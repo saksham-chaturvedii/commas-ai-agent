@@ -8,26 +8,25 @@
  * (`SourceAdapter.callTool`, `AgentError`/`classifyError`, the timeout race) is reused directly
  * from server/agent/runtime.ts's pattern inside sharedAgent.ts, not reimplemented here either.
  *
- * Scope for this phase, explicit and temporary: Commas only, read tools only.
- *   - Commas: "First expose the existing Commas demo/mock data through structured agent tools" —
- *     this phase's own instruction. `commas_mark_dispute_response_ready` (the one write tool on
- *     this source) is excluded — approving a write action mid-stream has no established UX yet
- *     (the legacy runtime's `pendingApproval` pause is a JSON round-trip; SSE has no equivalent
- *     today), so it stays exclusively the legacy dispute-chat runtime's job.
- *   - Everything else (Fathom, Zoom, Gmail, Google Calendar, GoHighLevel): explicitly excluded —
- *     "Do not implement OAuth connectors yet." Their adapters and registry entries already exist
- *     and keep serving the legacy runtime unchanged; nothing about their code needs to change to
- *     add them here later — see `SHARED_AGENT_TOOL_SOURCES` below, the one line that scopes this.
+ * Scope: read tools only, from every source the shared agent can reach.
+ *   - Commas: `commas_mark_dispute_response_ready` (the one write tool on this source) is
+ *     excluded — approving a write action mid-stream has no established UX yet (the legacy
+ *     runtime's `pendingApproval` pause is a JSON round-trip; SSE has no equivalent today), so
+ *     it stays exclusively the legacy dispute-chat runtime's job.
+ *   - Fathom/Zoom/Gmail/Google Calendar/GoHighLevel: widened to include these (audit P1-2) — the
+ *     global chat's own "Find information across my connected apps" suggestion chip, and any
+ *     request naming one of these sources, previously always failed on the route the real
+ *     frontend uses (`POST /api/agent/stream`) even with every source connected and enabled,
+ *     because this list only ever named "commas". These are still simulated connectors, not real
+ *     OAuth — nothing about that changed, only which of the ALREADY-simulated read tools this
+ *     runtime is allowed to see.
  */
 import type { RegisteredTool } from "../registry.js";
 import type { LlmToolDef } from "../../llm/types.js";
 import type { SourceId } from "../../types.js";
 
-/** The only sources the shared agent may call tools from this phase. Widening this (adding
- * "fathom", "zoom", etc.) is the entire change needed to extend the shared agent to a new
- * source once its OAuth/live-connection story exists — nothing else in this file, the loop
- * (sharedAgent.ts), or the adapters themselves needs to change. */
-export const SHARED_AGENT_TOOL_SOURCES: readonly SourceId[] = ["commas"];
+/** The sources the shared agent may call read tools from. */
+export const SHARED_AGENT_TOOL_SOURCES: readonly SourceId[] = ["commas", "google-calendar", "zoom", "fathom", "gmail", "crm"];
 
 /**
  * Read-only tools from `SHARED_AGENT_TOOL_SOURCES`, further narrowed to whatever this specific

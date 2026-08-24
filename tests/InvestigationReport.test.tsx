@@ -162,7 +162,14 @@ describe("investigation connected to the UI", () => {
 });
 
 describe("AI found vs. human verified — evidence already in the case", () => {
-  afterEach(() => cleanup());
+  // Evidence state is now persisted (audit P1-5), so localStorage must be reset between tests
+  // here just like every other test file that renders ChatStoreProvider — otherwise one test's
+  // evidence/verification state leaks into the next via the real persistence path.
+  beforeEach(() => localStorage.clear());
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
 
   const baseItem: Omit<AIEvidenceItem, "id" | "addedBy"> = {
     title: "Fathom call — 42-minute session",
@@ -177,7 +184,7 @@ describe("AI found vs. human verified — evidence already in the case", () => {
 
   /** Seeds one evidence item through the real store (addEvidenceItem) and renders DisputeDetail
    * reading that same store state — evidenceItems is a prop in the real app too (App.tsx passes
-   * evidenceByDispute[disputeId]), so this mirrors how a "Mark as verified" click would actually
+   * evidenceByDispute[disputeId]), so this mirrors how a "Mark as reviewed" click would actually
    * flow through to a re-render, rather than a static array the click can't affect. */
   function EvidenceHarness({ item }: { item: AIEvidenceItem }) {
     const { evidenceByDispute, addEvidenceItem } = useChatStore();
@@ -205,11 +212,11 @@ describe("AI found vs. human verified — evidence already in the case", () => {
     );
 
     expect(screen.getByText("AI found")).toBeInTheDocument();
-    expect(screen.queryByText("Human verified")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByText("Mark as verified"));
+    fireEvent.click(screen.getByText("Mark as reviewed"));
 
-    expect(screen.getByText("Human verified")).toBeInTheDocument();
+    expect(screen.getByText("Reviewed")).toBeInTheDocument();
     expect(screen.queryByText("AI found")).not.toBeInTheDocument();
   });
 
@@ -222,7 +229,7 @@ describe("AI found vs. human verified — evidence already in the case", () => {
     );
 
     expect(screen.queryByText("AI found")).not.toBeInTheDocument();
-    expect(screen.queryByText("Human verified")).not.toBeInTheDocument();
-    expect(screen.queryByText("Mark as verified")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reviewed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Mark as reviewed")).not.toBeInTheDocument();
   });
 });

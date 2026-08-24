@@ -32,8 +32,11 @@ export function AddCreditsModal({
 
   // Wipes chats/credits/sources/evidence/drafts back to seed (useChatStore's resetDemo), then
   // reloads to also clear any transient local component state (open modals, in-flight UI
-  // state) — lets the seller restart a demo mid-walkthrough cleanly.
+  // state) — lets the seller restart a demo mid-walkthrough cleanly. Confirmed first (audit
+  // P0-2): this is a destructive, irreversible wipe of every chat/evidence/draft in the
+  // workspace, previously one unconfirmed click away inside the purchase modal.
   const handleReset = () => {
+    if (!window.confirm("Reset all demo data? This permanently deletes every chat, evidence item, and draft in this workspace.")) return;
     resetDemo();
     window.location.reload();
   };
@@ -115,36 +118,41 @@ export function AddCreditsModal({
         </div>
 
         {/* Dev/demo-only — jump straight to a low balance to test the UI states without
-            sending N real messages. Not a normal production affordance. */}
-        <div className="mt-5 pt-4 border-t border-[var(--color-border-card)]">
-          <p className="text-[11px] uppercase tracking-wide font-semibold text-[var(--color-text-quaternary)] mb-2">
-            Demo tools
-          </p>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[11.5px] text-[var(--color-text-quaternary)] mr-0.5">Set remaining:</span>
-            {DEMO_TARGETS.map((n) => (
-              <button
-                key={n}
-                type="button"
-                onClick={() => setRemainingCreditsForDemo(n)}
-                className="h-6 px-2 rounded-md text-[11.5px] font-medium text-[var(--color-text-label)] bg-[var(--color-app-bg)] hover:bg-black/[0.06]"
-              >
-                {n}
-              </button>
-            ))}
-            <span className="text-[11px] text-[var(--color-text-quaternary)] ml-2">
-              ({Math.max(0, credits.totalCredits - credits.usedCredits)}/{credits.totalCredits} now)
-            </span>
+            sending N real messages. Not a normal production affordance. Gated behind DEV
+            (audit P0-2): these tools directly set the balance and wipe workspace data, and
+            previously rendered unconditionally inside the user-facing purchase modal even in a
+            production build. `npm run build`/`vite preview` never ship this section. */}
+        {import.meta.env.DEV && (
+          <div className="mt-5 pt-4 border-t border-[var(--color-border-card)]">
+            <p className="text-[11px] uppercase tracking-wide font-semibold text-[var(--color-text-quaternary)] mb-2">
+              Demo tools (dev only)
+            </p>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[11.5px] text-[var(--color-text-quaternary)] mr-0.5">Set remaining:</span>
+              {DEMO_TARGETS.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setRemainingCreditsForDemo(n)}
+                  className="h-6 px-2 rounded-md text-[11.5px] font-medium text-[var(--color-text-label)] bg-[var(--color-app-bg)] hover:bg-black/[0.06]"
+                >
+                  {n}
+                </button>
+              ))}
+              <span className="text-[11px] text-[var(--color-text-quaternary)] ml-2">
+                ({Math.max(0, credits.totalCredits - credits.usedCredits)}/{credits.totalCredits} now)
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleReset}
+              className="mt-2.5 flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[11.5px] font-medium text-[var(--color-text-label)] bg-[var(--color-app-bg)] hover:bg-black/[0.06]"
+            >
+              <RotateCcw size={12} strokeWidth={2} />
+              Reset all demo data
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={handleReset}
-            className="mt-2.5 flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[11.5px] font-medium text-[var(--color-text-label)] bg-[var(--color-app-bg)] hover:bg-black/[0.06]"
-          >
-            <RotateCcw size={12} strokeWidth={2} />
-            Reset all demo data
-          </button>
-        </div>
+        )}
       </div>
     </div>
   );

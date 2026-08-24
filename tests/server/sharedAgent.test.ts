@@ -432,7 +432,7 @@ describe("runSharedAgent (StubStreamClient)", () => {
     // history, exactly like a real tool-calling model would.
     const why = await ask("Why was it disputed?");
     expect(why.toLowerCase()).toContain("product not received");
-    expect(why).toContain("14 logins"); // dispute #2481's real, authored likelyReason text
+    expect(why).toContain("42-minute onboarding call"); // dispute #2481's real, authored likelyReason text
 
     const evidence = await ask("What evidence do we currently have?");
     expect(evidence).toContain("Access & activity records");
@@ -471,6 +471,33 @@ describe("runSharedAgent (StubStreamClient)", () => {
     const second = await ask("Tell me about dispute #2390.");
     expect(second).toContain("Dispute #2390");
     expect(second).not.toContain("Dispute #2481");
+  });
+
+  it("audit P1-4: a dispute mentioned earlier never hijacks an unrelated later question in the same global chat", async () => {
+    const store = new SessionStore();
+    const client = new StubStreamClient();
+    const ask = async (message: string) => {
+      const events: AgentStreamEvent[] = [];
+      await runSharedAgent({
+        sessionId: "chat-sticky-focus",
+        config: { mode: "global" },
+        userMessage: message,
+        requestContext: commasSources,
+        llmClient: client,
+        sessionStore: store,
+        adapters,
+        registry,
+        onEvent: (e) => { events.push(e); },
+      });
+      return events.find((e): e is Extract<AgentStreamEvent, { type: "done" }> => e.type === "done")!.text;
+    };
+
+    const disputeAnswer = await ask("Tell me about dispute #2481.");
+    expect(disputeAnswer).toContain("Dispute #2481");
+
+    const salesAnswer = await ask("Summarize my sales this month");
+    expect(salesAnswer).not.toContain("Dispute #2481");
+    expect(salesAnswer).toContain("$18,420");
   });
 
   it("no data available: honestly says a dispute doesn't exist rather than fabricating one", async () => {
@@ -780,6 +807,25 @@ describe("POST /api/agent/stream (HTTP layer)", () => {
     const done = frames[frames.length - 1];
     expect(done.event).toBe("done");
     expect((done.data as { text: string }).text).toContain("Dispute #2481");
+  });
+
+  it("audit P1-2: 'Find information across my connected apps' actually works over the real streaming route, with connector sources enabled", async () => {
+    const res = await app.request("/api/agent/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "http-chat-connected-apps",
+        mode: "global",
+        message: "Find information across my connected apps",
+        enabledSources: ["commas", "google-calendar", "zoom", "fathom", "gmail", "crm"],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const frames = await readSSE(res);
+    const done = frames[frames.length - 1];
+    expect(done.event).toBe("done");
+    const text = (done.data as { text: string }).text;
+    expect(text).not.toContain("No connected apps are enabled");
   });
 
   it("supports dispute-mode session config over the same route", async () => {

@@ -5,6 +5,7 @@ import { AgentError, classifyError } from "./errors.js";
 import { agentContextFromPageContext } from "./context/model.js";
 import { buildContextPrompt } from "./context/buildContext.js";
 import { PROPOSE_ACTION_TOOLS, PROPOSE_ACTION_TOOL_NAMES, buildProposedAction } from "./actions/index.js";
+import type { PendingApprovalStore } from "./approvals/store.js";
 import type {
   AgentRunResponse,
   ConversationTurn,
@@ -40,11 +41,18 @@ export interface RunAgentTurnArgs {
   llmClient: LlmClient;
   adapters: SourceAdapter[];
   registry: Map<string, RegisteredTool>;
+  /** Server-owned pending-approval ledger (audit P0-1) — every write tool this turn pauses on
+   * gets registered here before being returned to the client, so `resumeAfterApproval` can later
+   * verify a `/api/agent/approve` call is resolving something this server actually proposed. */
+  approvalStore: PendingApprovalStore;
 }
 
 export interface ResumeAfterApprovalArgs {
   decision: "approve" | "decline";
   toolCallId: string;
+  /** Client-asserted — used only as a cross-check against the server's own stored record
+   * (`approvalStore.consume`), never trusted on its own. The record's own `toolName`/`input`
+   * (what this server actually proposed) is what executes. */
   toolName: string;
   input: Record<string, unknown>;
   /** The prompt that originally led to this pending approval — replayed so the LLM has the
@@ -56,10 +64,11 @@ export interface ResumeAfterApprovalArgs {
   llmClient: LlmClient;
   adapters: SourceAdapter[];
   registry: Map<string, RegisteredTool>;
+  approvalStore: PendingApprovalStore;
 }
 
 export async function runAgentTurn(args: RunAgentTurnArgs): Promise<AgentRunResponse> {
-  const { prompt, enabledSources, context, conversationHistory, llmClient, adapters, registry } = args;
+  const { prompt, enabledSources, context, conversationHistory, llmClient, adapters, registry, approvalStore } = args;
   return runLoop({
     prompt,
     context,
@@ -67,6 +76,7 @@ export async function runAgentTurn(args: RunAgentTurnArgs): Promise<AgentRunResp
     llmClient,
     adapters,
     registry,
+    approvalStore,
     availableTools: availableToolsFor(enabledSources, registry, context),
     systemPrompt: buildSystemPrompt(context),
     toolHistory: [],
@@ -78,7 +88,25 @@ export async function runAgentTurn(args: RunAgentTurnArgs): Promise<AgentRunResp
 }
 
 export async function resumeAfterApproval(args: ResumeAfterApprovalArgs): Promise<AgentRunResponse> {
-  const { decision, toolCallId, toolName, input, prompt, enabledSources, context, conversationHistory, llmClient, adapters, registry } = args;
+  const { decision, toolCallId, prompt, enabledSources, context, conversationHistory, llmClient, adapters, registry, approvalStore } = args;
+
+  // The one-time, server-owned check (audit P0-1): a toolCallId this server never registered
+  // (forged), already consumed (replayed), or whose toolName doesn't match what was actually
+  // proposed is rejected here — the client's own `args.toolName`/`args.input` are never trusted
+  // to decide what executes.
+  const record = approvalStore.consume(toolCallId, args.toolName);
+  if (!record) {
+    return {
+      steps: [],
+      answer: "",
+      toolSummary: [],
+      error: {
+        code: "malformed_result",
+        message: "That action is no longer pending approval — it may have already been resolved or expired. Ask again to get a fresh confirmation.",
+      },
+    };
+  }
+  const { toolName, input } = record;
 
   const steps: ProgressStep[] = [];
   const toolSummary: ToolSummaryItem[] = [];
@@ -90,8 +118,8 @@ export async function resumeAfterApproval(args: ResumeAfterApprovalArgs): Promis
 
   if (decision === "decline") {
     steps.push({ id: `${sourceId}-${toolName}-declined`, sourceId, classification: "write", label: `Declined: ${registered?.displayName ?? toolName}` });
-    toolSummary.push({ sourceId, label: registered?.displayName ?? toolName, ok: false });
-    toolHistory.push({ toolCallId, toolName, input, result: { ok: false, data: "The user declined this action." } });
+    toolSummary.push({ sourceId, label: registered?.displayName ?? toolName, ok: false, declined: true });
+    toolHistory.push({ toolCallId, toolName, input, result: { ok: false, data: "The user declined this action.", declined: true } });
   } else {
     let ok = true;
     let resultData: unknown = null;
@@ -117,6 +145,7 @@ export async function resumeAfterApproval(args: ResumeAfterApprovalArgs): Promis
     llmClient,
     adapters,
     registry,
+    approvalStore,
     availableTools: availableToolsFor(enabledSources, registry, context),
     systemPrompt: buildSystemPrompt(context),
     toolHistory,
@@ -134,6 +163,7 @@ interface LoopState {
   llmClient: LlmClient;
   adapters: SourceAdapter[];
   registry: Map<string, RegisteredTool>;
+  approvalStore: PendingApprovalStore;
   availableTools: LlmToolDef[];
   systemPrompt: string;
   toolHistory: ToolCallRecord[];
@@ -148,7 +178,7 @@ function withProposedActions(response: AgentRunResponse, proposedActions: Propos
 }
 
 async function runLoop(state: LoopState): Promise<AgentRunResponse> {
-  const { prompt, context, conversationHistory, llmClient, adapters, registry, availableTools, systemPrompt, toolHistory, steps, toolSummary, proposedActions, startIteration } = state;
+  const { prompt, context, conversationHistory, llmClient, adapters, registry, approvalStore, availableTools, systemPrompt, toolHistory, steps, toolSummary, proposedActions, startIteration } = state;
 
   try {
     for (let i = startIteration; i < MAX_ITERATIONS; i++) {
@@ -208,8 +238,11 @@ async function runLoop(state: LoopState): Promise<AgentRunResponse> {
       const label = registered?.progressLabel ?? `Running ${step.toolName}…`;
 
       // Write tools never auto-execute — pause here and let the client round-trip through
-      // POST /api/agent/approve (resumeAfterApproval) before anything runs.
+      // POST /api/agent/approve (resumeAfterApproval) before anything runs. Registered
+      // server-side (audit P0-1) so that later call can verify it's resolving something this
+      // server actually proposed, not whatever toolName/input a client asserts.
       if (classification === "write") {
+        approvalStore.register(step.toolCallId, step.toolName, step.input);
         return {
           steps,
           answer: "",

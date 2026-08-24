@@ -44,9 +44,10 @@ export function RightPanel({
         {isDispute && chat.messages.length > 0 && (
           <button
             type="button"
-            aria-label="Start new session"
-            title="Start a new AI session for this dispute — clears this conversation"
+            aria-label="Clear conversation"
+            title="Clear this conversation — permanently deletes this investigation, evidence proposals, and any draft outcomes"
             onClick={() => {
+              if (!window.confirm("Clear this conversation? This permanently deletes the investigation and everything in it — there's no way to get it back.")) return;
               deleteChat(chat.id);
               onClose();
             }}

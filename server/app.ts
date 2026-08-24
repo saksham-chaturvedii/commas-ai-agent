@@ -16,6 +16,7 @@ import type { AgentApproveRequest, AgentRunRequest, AgentRunResponse, Conversati
 // --- shared agent runtime (docs/AI_ASSISTANT_ARCHITECTURE.md) — additive, alongside the legacy
 // runtime/LLM client imports above, which remain exactly as they were.
 import { SessionStore, type SessionConfig } from "./agent/sessions/store.js";
+import { PendingApprovalStore } from "./agent/approvals/store.js";
 import { runSharedAgent } from "./agent/runtime/sharedAgent.js";
 import type { DisputeFacts, WorkspaceDisputeSummary } from "./agent/context/model.js";
 import { AnthropicStreamClient } from "./llm/streaming/anthropicStreamClient.js";
@@ -98,6 +99,7 @@ export async function createApp() {
     ? new AnthropicStreamClient(anthropicApiKey)
     : new StubStreamClient();
   const sessionStore = new SessionStore();
+  const approvalStore = new PendingApprovalStore();
 
   const app = new Hono();
 
@@ -133,6 +135,7 @@ export async function createApp() {
       llmClient,
       adapters,
       registry,
+      approvalStore,
     });
     return c.json(result);
   });
@@ -161,6 +164,7 @@ export async function createApp() {
       llmClient,
       adapters,
       registry,
+      approvalStore,
     });
     return c.json(result);
   });

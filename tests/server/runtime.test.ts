@@ -7,6 +7,7 @@ import { CalendarAdapter } from "../../server/adapters/calendarAdapter.js";
 import { CrmAdapter } from "../../server/adapters/crmAdapter.js";
 import type { SourceAdapter } from "../../server/adapters/types.js";
 import { buildToolRegistry, type RegisteredTool } from "../../server/agent/registry.js";
+import { PendingApprovalStore } from "../../server/agent/approvals/store.js";
 import { runAgentTurn, resumeAfterApproval } from "../../server/agent/runtime.js";
 import { StubLlmClient } from "../../server/llm/stubClient.js";
 import type { PageContext } from "../../server/types.js";
@@ -21,6 +22,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
   let adapters: SourceAdapter[];
   let registry: Map<string, RegisteredTool>;
   const llmClient = new StubLlmClient();
+  const approvalStore = new PendingApprovalStore();
 
   const ALL_SOURCES = ["commas", "google-calendar", "zoom", "fathom", "gmail", "crm"] as const;
 
@@ -62,6 +64,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       llmClient,
       adapters,
       registry,
+      approvalStore,
     });
 
     expect(result.error).toBeUndefined();
@@ -82,6 +85,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       llmClient,
       adapters,
       registry,
+      approvalStore,
     });
 
     expect(result.error).toBeUndefined();
@@ -100,6 +104,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       llmClient,
       adapters,
       registry,
+      approvalStore,
     });
     expect(result.error).toBeUndefined();
     expect(result.toolSummary[0].ok).toBe(true);
@@ -114,6 +119,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       llmClient,
       adapters,
       registry,
+      approvalStore,
     });
     expect(result.steps).toHaveLength(0);
     expect(result.answer.toLowerCase()).toContain("no sources");
@@ -131,6 +137,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       llmClient,
       adapters: brokenAdapters,
       registry,
+      approvalStore,
     });
 
     expect(result.toolSummary[0].ok).toBe(false);
@@ -138,6 +145,23 @@ describe("runAgentTurn — the five required validation scenarios", () => {
   });
 
   describe("multi-source dispute investigation (the agent decides which tools it needs)", () => {
+    it("audit P1-10: with Commas disabled, answers immediately instead of running the whole external chain first", async () => {
+      const result = await runAgentTurn({
+        prompt: "Investigate this dispute",
+        enabledSources: ["fathom", "zoom", "gmail", "google-calendar", "crm"], // commas NOT enabled
+        context: DISPUTE_CONTEXT,
+        conversationHistory: [],
+        llmClient,
+        adapters,
+        registry,
+        approvalStore,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.answer).toContain("Commas is turned off");
+      expect(result.steps).toHaveLength(0);
+      expect(result.toolSummary).toHaveLength(0);
+    });
+
     it("selectively chains through the sources prioritized for this dispute's reason, skipping the rest", async () => {
       const result = await runAgentTurn({
         prompt: "Help me resolve this dispute",
@@ -147,6 +171,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
 
       expect(result.error).toBeUndefined();
@@ -179,6 +204,40 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       expect(report?.recommendedNextAction).toBeTruthy();
     });
 
+    it("audit P2-2: a source that errors mid-investigation is reported as failed, not silently dropped", async () => {
+      const realFathom = adapters.find((a) => a.sourceId === "fathom")!;
+      const failingFathom: SourceAdapter = {
+        sourceId: "fathom",
+        kind: realFathom.kind,
+        listTools: () => realFathom.listTools(),
+        callTool: async (name, args) => {
+          if (name === "fathom_search_calls") return { isError: true, data: "Fathom is temporarily unreachable.", rawText: "" };
+          return realFathom.callTool(name, args);
+        },
+      };
+      const failingAdapters = adapters.map((a) => (a.sourceId === "fathom" ? failingFathom : a));
+
+      const result = await runAgentTurn({
+        prompt: "Investigate this dispute",
+        enabledSources: ["commas", "fathom", "zoom", "gmail"],
+        context: DISPUTE_CONTEXT,
+        conversationHistory: [],
+        llmClient,
+        adapters: failingAdapters,
+        registry,
+        approvalStore,
+      });
+
+      const report = result.investigationReport!;
+      // Fathom errored — it's neither found evidence nor silently absent from the report.
+      expect(report.evidenceFound.some((e) => e.sourceLabel === "Fathom")).toBe(false);
+      expect(report.missingInformation.some((line) => line.includes("Fathom") && line.toLowerCase().includes("couldn't be checked"))).toBe(
+        true,
+      );
+      // The case strength explanation flags the failure instead of reading as unaffected.
+      expect(report.caseStrength.explanation.toLowerCase()).toContain("fathom");
+    });
+
     it("investigates a product_unacceptable dispute (Marcus Webb #2502) by prioritizing Calendar, Zoom, Fathom, and Gmail, surfacing contradicting evidence", async () => {
       const result = await runAgentTurn({
         prompt: "Investigate this dispute",
@@ -204,6 +263,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
 
       expect(result.error).toBeUndefined();
@@ -257,6 +317,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
 
       expect(result.error).toBeUndefined();
@@ -276,6 +337,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
 
       const usedSources = new Set(result.steps.map((s) => s.sourceId));
@@ -299,6 +361,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
 
       expect(result.error).toBeUndefined();
@@ -318,6 +381,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
       const approval = pending.pendingApproval!;
 
@@ -333,6 +397,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
 
       expect(result.error).toBeUndefined();
@@ -340,6 +405,72 @@ describe("runAgentTurn — the five required validation scenarios", () => {
       expect(result.toolSummary).toEqual([{ sourceId: "commas", label: "Mark response ready", ok: true }]);
       expect(result.steps[0].classification).toBe("write");
       expect(result.answer.toLowerCase()).toContain("marked");
+    });
+
+    it("audit P0-1: a forged toolCallId the server never registered is rejected, never executed", async () => {
+      const result = await resumeAfterApproval({
+        decision: "approve",
+        toolCallId: "forged-id-nobody-proposed",
+        toolName: "commas_mark_dispute_response_ready",
+        input: { dispute_id: "2455" },
+        prompt: "Please mark the response ready",
+        enabledSources: ["commas"],
+        context: DISPUTE_CONTEXT,
+        conversationHistory: [],
+        llmClient,
+        adapters,
+        registry,
+        approvalStore,
+      });
+      expect(result.error).toBeDefined();
+      expect(result.toolSummary).toHaveLength(0);
+      // The forged target's own record must be untouched.
+      const check = await runAgentTurn({
+        prompt: "tell me about this dispute",
+        enabledSources: ["commas"],
+        context: { kind: "dispute", id: "2455", label: "Dispute #2455" },
+        conversationHistory: [],
+        llmClient,
+        adapters,
+        registry,
+        approvalStore,
+      });
+      expect(check.answer).not.toContain("ready to submit");
+    });
+
+    it("audit P0-1: the same toolCallId cannot be replayed a second time (one-time consume)", async () => {
+      const pending = await runAgentTurn({
+        prompt: "Please mark the response ready",
+        enabledSources: ["commas"],
+        context: DISPUTE_CONTEXT,
+        conversationHistory: [],
+        llmClient,
+        adapters,
+        registry,
+        approvalStore,
+      });
+      const approval = pending.pendingApproval!;
+      const args = {
+        decision: "approve" as const,
+        toolCallId: approval.toolCallId,
+        toolName: approval.toolName,
+        input: approval.input,
+        prompt: "Please mark the response ready",
+        enabledSources: ["commas" as const],
+        context: DISPUTE_CONTEXT,
+        conversationHistory: [],
+        llmClient,
+        adapters,
+        registry,
+        approvalStore,
+      };
+      const first = await resumeAfterApproval(args);
+      expect(first.error).toBeUndefined();
+      expect(first.toolSummary[0]?.ok).toBe(true);
+
+      const replay = await resumeAfterApproval(args);
+      expect(replay.error).toBeDefined();
+      expect(replay.toolSummary).toHaveLength(0);
     });
 
     it("decline: never calls the tool, and the agent acknowledges without executing", async () => {
@@ -351,6 +482,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
       const approval = pending.pendingApproval!;
 
@@ -366,9 +498,15 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
 
-      expect(result.toolSummary).toEqual([{ sourceId: "commas", label: "Mark response ready", ok: false }]);
+      expect(result.toolSummary).toEqual([
+        { sourceId: "commas", label: "Mark response ready", ok: false, declined: true },
+      ]);
+      // audit P2-1: a decline reads as an acknowledgement, not a technical failure.
+      expect(result.answer).toContain("won't");
+      expect(result.answer).not.toContain("couldn't complete");
       // the tool never actually ran — verify via a fresh lookup that the dispute's response
       // status wasn't flipped by the declined attempt
       const check = await runAgentTurn({
@@ -379,6 +517,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
       expect(check.answer).not.toContain("ready to submit");
     });
@@ -393,6 +532,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
       expect(first.answer).toContain("sarah.johnson@email.com");
 
@@ -406,6 +546,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
 
       expect(followUp.error).toBeUndefined();
@@ -443,6 +584,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
       expect(result.error).toBeUndefined();
       const report = result.investigationReport!;
@@ -464,6 +606,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
       expect(result.error).toBeUndefined();
       expect(result.steps.map((s) => s.id).join()).not.toContain("commas_get_dispute");
@@ -480,6 +623,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
       expect(result.error).toBeUndefined();
       expect(result.answer).toContain("$18,420");
@@ -495,6 +639,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
       expect(result.error).toBeUndefined();
       expect(result.answer).toContain("4 open disputes");
@@ -510,6 +655,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
       expect(result.answer).not.toContain("This preview only knows");
       expect(result.answer.toLowerCase()).not.toContain("demo scenario");
@@ -524,6 +670,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
       expect(result.answer).toContain("Who do you mean?");
       expect(result.answer).toContain("Sarah Johnson");
@@ -538,6 +685,7 @@ describe("runAgentTurn — the five required validation scenarios", () => {
         llmClient,
         adapters,
         registry,
+        approvalStore,
       });
       expect(result.answer).toContain("Anytime");
       expect(result.steps).toHaveLength(0);

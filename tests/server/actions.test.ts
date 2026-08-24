@@ -7,6 +7,7 @@ import { CalendarAdapter } from "../../server/adapters/calendarAdapter.js";
 import { CrmAdapter } from "../../server/adapters/crmAdapter.js";
 import type { SourceAdapter } from "../../server/adapters/types.js";
 import { buildToolRegistry, type RegisteredTool } from "../../server/agent/registry.js";
+import { PendingApprovalStore } from "../../server/agent/approvals/store.js";
 import { runAgentTurn } from "../../server/agent/runtime.js";
 import { buildProposedAction } from "../../server/agent/actions/index.js";
 import { StubLlmClient } from "../../server/llm/stubClient.js";
@@ -110,6 +111,7 @@ describe("propose-tools wired into runAgentTurn (ACTIVE dispute)", () => {
   let adapters: SourceAdapter[];
   let registry: Map<string, RegisteredTool>;
   const llmClient = new StubLlmClient();
+  const approvalStore = new PendingApprovalStore();
   const ALL_SOURCES = ["commas", "google-calendar", "zoom", "fathom", "gmail", "crm"] as const;
 
   beforeAll(async () => {
@@ -133,6 +135,7 @@ describe("propose-tools wired into runAgentTurn (ACTIVE dispute)", () => {
       llmClient,
       adapters,
       registry,
+      approvalStore,
     });
 
     expect(result.error).toBeUndefined();
@@ -161,6 +164,7 @@ describe("propose-tools wired into runAgentTurn (ACTIVE dispute)", () => {
       llmClient,
       adapters,
       registry,
+      approvalStore,
     });
 
     expect(result.error).toBeUndefined();
@@ -180,6 +184,7 @@ describe("propose-tools are never offered on a RESOLVED dispute", () => {
   let adapters: SourceAdapter[];
   let registry: Map<string, RegisteredTool>;
   const llmClient = new StubLlmClient();
+  const approvalStore = new PendingApprovalStore();
 
   beforeAll(async () => {
     adapters = [await CommasAdapter.createMock()];
@@ -195,6 +200,7 @@ describe("propose-tools are never offered on a RESOLVED dispute", () => {
       llmClient,
       adapters,
       registry,
+      approvalStore,
     });
 
     expect(result.error).toBeUndefined();
@@ -211,6 +217,7 @@ describe("propose-tools are never offered on a RESOLVED dispute", () => {
       llmClient,
       adapters,
       registry,
+      approvalStore,
     });
 
     expect(result.error).toBeUndefined();
@@ -222,6 +229,7 @@ describe("propose-tools are never offered outside dispute context", () => {
   let adapters: SourceAdapter[];
   let registry: Map<string, RegisteredTool>;
   const llmClient = new StubLlmClient();
+  const approvalStore = new PendingApprovalStore();
 
   beforeAll(async () => {
     adapters = [await CommasAdapter.createMock()];
@@ -237,6 +245,7 @@ describe("propose-tools are never offered outside dispute context", () => {
       llmClient,
       adapters,
       registry,
+      approvalStore,
     });
     expect(result.proposedActions).toBeUndefined();
   });

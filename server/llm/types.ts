@@ -12,7 +12,7 @@ export interface ToolCallRecord {
   toolCallId: string;
   toolName: string;
   input: Record<string, unknown>;
-  result?: { ok: boolean; data: unknown };
+  result?: { ok: boolean; data: unknown; declined?: boolean };
 }
 
 export interface LlmStepInput {

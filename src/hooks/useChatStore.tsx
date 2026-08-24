@@ -64,12 +64,18 @@ const HISTORY_TURN_LIMIT = 20;
 // v3: unified conversation model (docs/AI_ASSISTANT_IMPLEMENTATION_STATUS.md's current phase)
 // added the required `type`/`disputeId` fields to `Chat` — bumping the key, same as v1→v2,
 // rather than writing runtime normalization for a handful of prototype localStorage records.
-const STORAGE_KEY = "commas-ai-agent:v3";
+// v4: persist case state (evidence/drafts/mark-ready) too (audit P1-5) — previously only
+// `chats`/`sources`/`credits` survived a reload, so a chat message could claim "Added 1 evidence
+// item" while the checklist it referred to had already reverted to empty.
+const STORAGE_KEY = "commas-ai-agent:v4";
 
 interface PersistedShape {
   chats: Chat[];
   sources: SourceInfo[];
   credits: CreditsState;
+  evidenceByDispute: Record<string, AIEvidenceItem[]>;
+  responseDraftByDispute: Record<string, string>;
+  markedReadyDisputeIds: string[];
 }
 
 function isValidCreditsShape(c: unknown): c is CreditsState {
@@ -116,6 +122,11 @@ function loadPersisted(): PersistedShape | null {
       // Falls back to a fresh 300/0 balance if localStorage still holds the old
       // {balance, startingBalance} shape from before the credit-system rebuild.
       credits: isValidCreditsShape(parsed.credits) ? parsed.credits : INITIAL_CREDITS,
+      evidenceByDispute:
+        parsed.evidenceByDispute && typeof parsed.evidenceByDispute === "object" ? parsed.evidenceByDispute : seedEvidenceByDispute(),
+      responseDraftByDispute:
+        parsed.responseDraftByDispute && typeof parsed.responseDraftByDispute === "object" ? parsed.responseDraftByDispute : {},
+      markedReadyDisputeIds: Array.isArray(parsed.markedReadyDisputeIds) ? parsed.markedReadyDisputeIds : [],
     };
   } catch {
     return null;
@@ -238,9 +249,13 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   const [runSteps, setRunSteps] = useState<ProgressStep[]>([]);
   const [visibleStepIds, setVisibleStepIds] = useState<string[]>([]);
   const [pendingApproval, setPendingApproval] = useState<PendingApprovalState | null>(null);
-  const [markedReadyDisputeIds, setMarkedReadyDisputeIds] = useState<string[]>([]);
-  const [evidenceByDispute, setEvidenceByDispute] = useState<Record<string, AIEvidenceItem[]>>(seedEvidenceByDispute);
-  const [responseDraftByDispute, setResponseDraftByDispute] = useState<Record<string, string>>({});
+  const [markedReadyDisputeIds, setMarkedReadyDisputeIds] = useState<string[]>(initial?.markedReadyDisputeIds ?? []);
+  const [evidenceByDispute, setEvidenceByDispute] = useState<Record<string, AIEvidenceItem[]>>(
+    initial?.evidenceByDispute ?? seedEvidenceByDispute,
+  );
+  const [responseDraftByDispute, setResponseDraftByDispute] = useState<Record<string, string>>(
+    initial?.responseDraftByDispute ?? {},
+  );
 
   const cancelledRef = useRef(false);
   const timersRef = useRef<number[]>([]);
@@ -252,8 +267,8 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   chatsRef.current = chats;
 
   useEffect(() => {
-    persist({ chats, sources, credits });
-  }, [chats, sources, credits]);
+    persist({ chats, sources, credits, evidenceByDispute, responseDraftByDispute, markedReadyDisputeIds });
+  }, [chats, sources, credits, evidenceByDispute, responseDraftByDispute, markedReadyDisputeIds]);
 
   const clearTimers = useCallback(() => {
     timersRef.current.forEach((t) => window.clearTimeout(t));
@@ -393,7 +408,10 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        if (!plan.error) {
+        // A turn whose only tool activity was the human declining a write action isn't
+        // billable work — nothing was investigated or accomplished (audit P2-1).
+        const wasPureDecline = plan.toolSummary.length > 0 && plan.toolSummary.every((t) => t.declined);
+        if (!plan.error && !wasPureDecline) {
           chargeCredits(creditCostForDisputeTurn(plan));
         }
 
@@ -495,6 +513,12 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       // charge a credit) once the workspace is out of credits.
       if (remainingCredits(credits) <= 0) return;
 
+      // Defense in depth alongside disconnectSource stripping enabled sources on disconnect
+      // (audit P1-3): never send a source the workspace no longer considers connected, even if
+      // this chat's own enabledSources somehow still names it.
+      const connectedIds = new Set(sources.filter((s) => s.connection === "connected").map((s) => s.id));
+      const liveEnabledSources = chat.enabledSources.filter((s) => connectedIds.has(s));
+
       // One run at a time. The composer already disables itself while another chat is
       // running, but suggestion chips call sendMessage directly — without this guard a chip
       // click would clear the first run's timers and strand that chat in "running" forever
@@ -554,7 +578,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
           let plan: AgentRunPlan;
           try {
             plan = await runAgentTurn(
-              { prompt: trimmed, enabledSources: chat.enabledSources, context: chat.context, history },
+              { prompt: trimmed, enabledSources: liveEnabledSources, context: chat.context, history },
               controller.signal,
             );
           } catch {
@@ -590,7 +614,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
               mode: "global",
               message: trimmed,
               history,
-              enabledSources: chat.enabledSources,
+              enabledSources: liveEnabledSources,
               workspace: { disputesNeedingAttention: disputesNeedingAttention() },
             },
             (delta) => appendStreamDelta(chatId, messageId, delta),
@@ -630,7 +654,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
         }, 250);
       })();
     },
-    [chats, credits, runChatId, clearTimers, applyPlan, ensureStreamingMessage, appendStreamDelta, finalizeStreamedMessage, chargeCredits],
+    [chats, credits, sources, runChatId, clearTimers, applyPlan, ensureStreamingMessage, appendStreamDelta, finalizeStreamedMessage, chargeCredits],
   );
 
   const resolveApproval = useCallback(
@@ -808,6 +832,10 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
 
   const disconnectSource = useCallback((sourceId: SourceId) => {
     setSources((prev) => prev.map((s) => (s.id === sourceId ? { ...s, connection: "not_connected" } : s)));
+    // Strip it from every chat's enabledSources too — a disconnected source must never keep
+    // being queried by a chat that enabled it earlier (audit P1-3). sendMessage also filters
+    // against live connection state as defense in depth.
+    setChats((prev) => prev.map((c) => ({ ...c, enabledSources: c.enabledSources.filter((s) => s !== sourceId) })));
   }, []);
 
   const addCredits = useCallback((amount: number) => {
@@ -832,7 +860,14 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     setMarkedReadyDisputeIds([]);
     setEvidenceByDispute(seedEvidenceByDispute());
     setResponseDraftByDispute({});
-    persist({ chats: SEED_CHATS, sources: SOURCES, credits: INITIAL_CREDITS });
+    persist({
+      chats: SEED_CHATS,
+      sources: SOURCES,
+      credits: INITIAL_CREDITS,
+      evidenceByDispute: seedEvidenceByDispute(),
+      responseDraftByDispute: {},
+      markedReadyDisputeIds: [],
+    });
   }, [clearTimers]);
 
   const value = useMemo(

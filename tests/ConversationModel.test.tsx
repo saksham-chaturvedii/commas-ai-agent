@@ -224,7 +224,7 @@ describe("unified conversation model", () => {
       expect(screen.queryByText("Marcus's investigation summary.")).not.toBeInTheDocument();
     });
 
-    it("dispute investigations never appear in the global Chat page's history list", async () => {
+    it("audit P1-7: a dispute investigation with real messages stays reachable from the global Chat page's history list", async () => {
       render(<App />);
       fireEvent.click(screen.getByLabelText("Resolution Center"));
       fireEvent.click(screen.getByText("Sarah Johnson"));
@@ -237,9 +237,15 @@ describe("unified conversation model", () => {
       });
       fireEvent.click(screen.getByLabelText("Close panel"));
 
+      // Navigate away entirely (not "open in full chat view") and the investigation is still
+      // reachable from the Chat page's own history list — it's a real conversation that
+      // happened, not just visible while it's the active row.
       fireEvent.click(screen.getByLabelText("Chat"));
-      expect(screen.queryByRole("button", { name: /Dispute #2481/ })).not.toBeInTheDocument();
-      expect(screen.queryByText("Sarah's investigation summary.")).not.toBeInTheDocument();
+      const historyRow = screen.getByRole("button", { name: /Dispute #2481/ });
+      expect(historyRow).toBeInTheDocument();
+
+      fireEvent.click(historyRow);
+      expect(screen.getByText("Sarah's investigation summary.")).toBeInTheDocument();
     });
   });
 });

@@ -10,10 +10,11 @@ import { buildToolRegistry } from "../../server/agent/registry.js";
 import { sharedAgentToolsFor, SHARED_AGENT_TOOL_SOURCES } from "../../server/agent/tools/index.js";
 
 /**
- * The shared agent's tool-scoping decision (docs/AI_ASSISTANT_ARCHITECTURE.md §6) — this phase's
- * explicit, temporary policy: Commas only, read tools only. All 6 source adapters (matching
- * server/app.ts's real construction) are wired up here so these tests prove the SCOPING itself,
- * not an artifact of only Commas being available to filter from.
+ * The shared agent's tool-scoping decision (docs/AI_ASSISTANT_ARCHITECTURE.md §6) — read tools
+ * only, from every source (audit P1-2 widened this from Commas-only, which meant the global
+ * chat's own "connected apps" suggestion chip always failed on the real route). All 6 source
+ * adapters (matching server/app.ts's real construction) are wired up here so these tests prove
+ * the SCOPING itself, not an artifact of only Commas being available to filter from.
  */
 async function allAdapters(): Promise<SourceAdapter[]> {
   return [
@@ -27,7 +28,7 @@ async function allAdapters(): Promise<SourceAdapter[]> {
 }
 
 describe("sharedAgentToolsFor", () => {
-  it("exposes only Commas's read tools, even when every source is enabled and connected", async () => {
+  it("exposes read tools from every source, when every source is enabled and connected", async () => {
     const adapters = await allAdapters();
     const registry = await buildToolRegistry(adapters);
 
@@ -37,7 +38,18 @@ describe("sharedAgentToolsFor", () => {
     );
 
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ["commas_get_dispute", "commas_list_disputes", "fanbasis_get_transaction", "fanbasis_list_customers", "fanbasis_list_transactions"].sort(),
+      [
+        "commas_get_dispute",
+        "commas_list_disputes",
+        "fanbasis_get_transaction",
+        "fanbasis_list_customers",
+        "fanbasis_list_transactions",
+        "calendar_list_events",
+        "zoom_list_meetings",
+        "fathom_search_calls",
+        "gmail_search_threads",
+        "crm_get_contact",
+      ].sort(),
     );
   });
 
@@ -48,21 +60,15 @@ describe("sharedAgentToolsFor", () => {
     expect(tools.some((t) => t.name === "commas_mark_dispute_response_ready")).toBe(false);
   });
 
-  it("never includes Fathom/Zoom/Gmail/Calendar/GoHighLevel tools, even when explicitly enabled — 'do not implement OAuth connectors yet'", async () => {
-    const adapters = await allAdapters();
-    const registry = await buildToolRegistry(adapters);
-    const tools = sharedAgentToolsFor(["fathom", "zoom", "gmail", "google-calendar", "crm"], registry);
-    expect(tools).toEqual([]);
-  });
-
-  it("respects this specific chat's enabled sources — Commas tools disappear if the chat has Commas turned off", async () => {
+  it("respects this specific chat's enabled sources — a source's tools disappear if the chat has it turned off", async () => {
     const adapters = await allAdapters();
     const registry = await buildToolRegistry(adapters);
     const tools = sharedAgentToolsFor(["google-calendar", "zoom", "fathom"], registry); // commas NOT enabled
-    expect(tools).toEqual([]);
+    expect(tools.some((t) => t.name.startsWith("commas_") || t.name.startsWith("fanbasis_"))).toBe(false);
+    expect(tools.map((t) => t.name).sort()).toEqual(["calendar_list_events", "fathom_search_calls", "zoom_list_meetings"].sort());
   });
 
-  it("SHARED_AGENT_TOOL_SOURCES documents exactly the Commas-only scope this phase — widening it is the whole change needed to add a source later", () => {
-    expect(SHARED_AGENT_TOOL_SOURCES).toEqual(["commas"]);
+  it("SHARED_AGENT_TOOL_SOURCES includes every simulated connector, not just Commas", () => {
+    expect([...SHARED_AGENT_TOOL_SOURCES].sort()).toEqual(["commas", "crm", "fathom", "gmail", "google-calendar", "zoom"].sort());
   });
 });

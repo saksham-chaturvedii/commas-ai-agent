@@ -160,19 +160,20 @@ const DISPUTES: MockDispute[] = [
     responseStatus: "not_started",
     scenario: "needs_response",
     likelyReason:
-      "Sarah engaged heavily with the product after purchase — 14 logins and 6 of 12 lessons completed, plus a " +
-      "42-minute onboarding call on Fathom. That pattern points to a forgotten-purchase or friendly-fraud dispute " +
-      "rather than genuine non-delivery.",
+      "Sarah had a 42-minute onboarding call on Fathom on August 4, corroborated by a matching Zoom meeting record " +
+      "— real engagement with the product shortly after purchase. That's consistent with a forgotten-purchase or " +
+      "friendly-fraud dispute rather than genuine non-delivery, though access/login records would make the case " +
+      "stronger (none are on file yet).",
     evidenceCollected: [],
     evidenceMissing: ["Access & activity records", "Customer communications", "Transaction & payment details"],
     recommendedAction:
       "Add your access/activity records and transaction confirmation to the evidence checklist, then respond " +
-      "before the Aug 13 deadline with proof Sarah received and used the product.",
+      "before the Aug 23 deadline with proof Sarah received and used the product.",
     draftResponse:
       "The customer, Sarah Johnson, purchased the Pro Coaching Program on August 2, 2026. Our records show she " +
-      "logged into the course portal 14 times and completed 6 of 12 lessons, and attended a 42-minute onboarding " +
-      "call on August 4. This level of engagement is inconsistent with a claim of non-delivery — the product was " +
-      "clearly delivered and actively used. We respectfully ask that this dispute be resolved in our favor.",
+      "attended a 42-minute onboarding call on August 4, confirmed by a matching Zoom meeting record. This " +
+      "engagement is inconsistent with a claim of non-delivery — the product was delivered and used. We " +
+      "respectfully ask that this dispute be resolved in our favor.",
     communicationsSummary:
       "There's one Gmail thread with Sarah (\"Welcome to Pro Coaching Program\", Aug 2–3): she initially asked how " +
       "to access the program, support replied with the login link, and she confirmed \"Got it, thanks! I'm in now.\" " +

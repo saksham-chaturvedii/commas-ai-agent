@@ -75,13 +75,27 @@ function findDisputeIdMentioned(text: string): string | undefined {
 
 /** Global chat has no `context.id` to fall back on, so a follow-up like "Why was it disputed?"
  * (no id restated) has to recall which dispute the conversation was just about — mirrors
- * `findRecentEmail` below exactly (scan conversation text, most recent turn first). */
+ * `findRecentEmail` below exactly (scan conversation text, most recent turn first). Suppressing
+ * this recall for a message that's clearly about something else entirely (`looksLikeUnrelatedQuery`,
+ * checked at the call site) is what prevents a dispute mentioned many turns back from "sticking"
+ * to an unrelated later question (audit P1-4) — a shrunk scan window was tried first and
+ * rejected: it broke the legitimate case of a real multi-question follow-up thread about the
+ * same dispute (id, why, evidence, purchase history) once that thread ran past a few turns. */
 function findRecentDisputeId(history: ConversationTurn[]): string | undefined {
   for (let i = history.length - 1; i >= 0; i--) {
     const id = findDisputeIdMentioned(history[i].text);
     if (id) return id;
   }
   return undefined;
+}
+
+/** A message this clearly about something else (sales/revenue, the whole disputes portfolio, or
+ * a plain customer lookup) should never be hijacked into a specific dispute's case summary just
+ * because that dispute came up a turn or two earlier (audit P1-4) — these patterns mirror the
+ * ones their own branches further down already match on, checked here only to SUPPRESS the
+ * recall fallback, never to route anywhere themselves. */
+function looksLikeUnrelatedQuery(p: string): boolean {
+  return /\b(sales|transaction|transactions|revenue)\b/.test(p) || /\bdisputes\b/.test(p);
 }
 
 /** Matches an email without swallowing a trailing sentence period — plain `[\w.-]+` for the
@@ -161,7 +175,7 @@ export class StubLlmClient implements LlmClient {
     // currently have?", "Has this customer purchased from us before?". Dispute-context chats
     // never reach this: they already know their dispute from `context.id` below.
     if (context?.kind !== "dispute" && hasTool("commas_get_dispute")) {
-      const disputeId = findDisputeIdMentioned(userPrompt) ?? findRecentDisputeId(conversationHistory);
+      const disputeId = findDisputeIdMentioned(userPrompt) ?? (looksLikeUnrelatedQuery(p) ? undefined : findRecentDisputeId(conversationHistory));
       if (disputeId) {
         const needsDisputeLookup = !calledNames.includes("commas_get_dispute");
         if (needsDisputeLookup) {
@@ -353,6 +367,17 @@ export class StubLlmClient implements LlmClient {
       return { type: "tool_call", toolCallId: newId(), toolName: "commas_get_dispute", input: { id: disputeId } };
     }
 
+    // Commas turned off for this chat: there's no dispute record to investigate around, so stop
+    // here rather than running the whole external-source chain first and only THEN admitting it
+    // (audit P1-10 — this used to check 5 connectors, several minutes of simulated progress and
+    // a real credit charge, before answering "Commas is turned off").
+    if (!calledNames.has("commas_get_dispute") && !hasTool("commas_get_dispute")) {
+      return {
+        type: "final",
+        text: "Commas is turned off as a source for this chat, so I can't look up the dispute. Enable it in the sources menu and ask again.",
+      };
+    }
+
     // The dispute record has to come back before we know which reason code to prioritize by —
     // until then there's nothing more the chain can decide.
     const disputeResult = toolHistory.find((t) => t.toolName === "commas_get_dispute")?.result;
@@ -407,12 +432,13 @@ export class StubLlmClient implements LlmClient {
       });
     }
 
-    // Only proposed when gmail_search_threads was actually called this turn — d.communicationsSummary
-    // is present on the dispute record regardless of whether Gmail is enabled for this chat, but
-    // citing "Gmail" as the source when Gmail was never actually checked would misattribute it,
-    // the same discipline synthesizeDisputeInvestigation already applies to its own findings.
-    const gmailChecked = toolHistory.some((t) => t.toolName === "gmail_search_threads");
-    if (gmailChecked && d.evidenceMissing.includes("Customer communications") && d.communicationsSummary) {
+    // Only proposed when gmail_search_threads was actually called AND actually found a thread —
+    // citing an absence ("no threads found") as an "Added" evidence item would misrepresent what
+    // was found as what wasn't (audit P1-6). d.communicationsSummary is authored prose that can
+    // describe either an existing thread or the lack of one; only the former is real evidence.
+    const gmailResult = toolHistory.find((t) => t.toolName === "gmail_search_threads")?.result;
+    const gmailThreads = gmailResult?.ok ? ((gmailResult.data as { threads: unknown[] }).threads ?? []) : [];
+    if (gmailThreads.length > 0 && d.evidenceMissing.includes("Customer communications") && d.communicationsSummary) {
       items.push({
         category: "Customer communications",
         title: "Customer correspondence",
@@ -423,16 +449,11 @@ export class StubLlmClient implements LlmClient {
       });
     }
 
-    if (d.evidenceMissing.includes("Access & activity records") && !items.some((i) => i.category === "Access & activity records")) {
-      items.push({
-        category: "Access & activity records",
-        title: "Account activity summary",
-        record: d.likelyReason,
-        why: "Documents the customer's engagement with the product.",
-        sourceType: "activity",
-        sourceLabel: "Commas",
-      });
-    }
+    // No "Commas" fallback for access/activity evidence: Commas exposes no access/login/lesson
+    // data (see server/mcp/mockCommasServer.ts) — a candidate here used to cite d.likelyReason
+    // (authored narrative prose, not a tool result) as if it were a Commas-sourced record, which
+    // is exactly the "state a fact you can't support" failure audit P0-3 flagged. Access-activity
+    // evidence can only ever come from an actual source above (Fathom).
 
     if (items.length === 0) return undefined;
     return {
@@ -483,6 +504,13 @@ export class StubLlmClient implements LlmClient {
     const notPrioritized = ALL_INVESTIGATION_TOOLS.filter(
       (name) => availableToolNames.includes(name) && !priority.has(name) && !checked.has(name),
     );
+    // A source that was called but errored out is neither "not enabled" nor "not prioritized"
+    // — it matches neither filter above and previously vanished from the report entirely
+    // (audit P2-2). Surface it as its own category so a source error reads as "couldn't be
+    // checked," not as if it were never relevant.
+    const failed = ALL_INVESTIGATION_TOOLS.filter(
+      (name) => checked.has(name) && toolHistory.find((t) => t.toolName === name)?.result?.ok === false,
+    );
     const missingInformation: string[] = [];
     if (notEnabled.length > 0) {
       const labels = notEnabled.map((n) => SOURCE_TOOL_NAMES[n]).filter(Boolean);
@@ -491,6 +519,10 @@ export class StubLlmClient implements LlmClient {
     if (notPrioritized.length > 0) {
       const labels = notPrioritized.map((n) => SOURCE_TOOL_NAMES[n]).filter(Boolean);
       missingInformation.push(`${labels.join(", ")} — available but not checked; lower priority for a "${reasonCode.replace(/_/g, " ")}" investigation.`);
+    }
+    if (failed.length > 0) {
+      const labels = failed.map((n) => SOURCE_TOOL_NAMES[n]).filter(Boolean);
+      missingInformation.push(`${labels.join(", ")} — couldn't be checked (source error). Retry before relying on this report.`);
     }
 
     const recommendedNextAction =
@@ -509,7 +541,13 @@ export class StubLlmClient implements LlmClient {
       missingInformation,
       potentialContradictions: findContradictions(toolHistory, dispute),
       recommendedNextAction,
-      caseStrength: caseStrengthFor(dispute),
+      caseStrength:
+        failed.length > 0
+          ? {
+              ...caseStrengthFor(dispute),
+              explanation: `${caseStrengthFor(dispute).explanation} (Note: ${failed.map((n) => SOURCE_TOOL_NAMES[n]).filter(Boolean).join(", ")} couldn't be checked — this assessment may change once it's retried.)`,
+            }
+          : caseStrengthFor(dispute),
     };
 
     const sourcesChecked = toolHistory.filter((t) => t.toolName !== "commas_get_dispute" && t.toolName !== "propose_add_evidence").length;
@@ -607,6 +645,9 @@ export class StubLlmClient implements LlmClient {
     if (!last.result) return { type: "final", text: "I wasn't able to check that." };
 
     if (!last.result.ok) {
+      if (last.result.declined) {
+        return { type: "final", text: "Okay — I won't do that. Let me know if you'd like to try something else." };
+      }
       const detail = typeof last.result.data === "string" ? last.result.data : "the lookup failed";
       return { type: "final", text: `I couldn't complete that — ${detail}.` };
     }

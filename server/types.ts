@@ -49,6 +49,10 @@ export interface ToolSummaryItem {
    * "Checked N sources" summary so it shows what was actually found, not just what was
    * checked. */
   resultLabel?: string;
+  /** True when this entry is a human-declined write action, not a genuine failure — lets
+   * callers (finalize()'s response text, the client's credit-charging logic) tell "the user
+   * said no" apart from "the tool broke" even though both currently carry ok: false. */
+  declined?: boolean;
 }
 
 /** One prior turn of the conversation — role + final text only, no tool internals, kept lean

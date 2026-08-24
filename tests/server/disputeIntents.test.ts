@@ -4,6 +4,7 @@ import { CommasAdapter } from "../../server/adapters/commasAdapter.js";
 import { CrmAdapter } from "../../server/adapters/crmAdapter.js";
 import type { SourceAdapter } from "../../server/adapters/types.js";
 import { buildToolRegistry, type RegisteredTool } from "../../server/agent/registry.js";
+import { PendingApprovalStore } from "../../server/agent/approvals/store.js";
 import { runAgentTurn } from "../../server/agent/runtime.js";
 import { StubLlmClient } from "../../server/llm/stubClient.js";
 import type { PageContext } from "../../server/types.js";
@@ -16,6 +17,7 @@ describe("dispute-intent demo questions (deterministic, per-case)", () => {
   let adapters: SourceAdapter[];
   let registry: Map<string, RegisteredTool>;
   const llmClient = new StubLlmClient();
+  const approvalStore = new PendingApprovalStore();
 
   beforeAll(async () => {
     adapters = [await CommasAdapter.createMock()];
@@ -33,6 +35,7 @@ describe("dispute-intent demo questions (deterministic, per-case)", () => {
       llmClient,
       adapters,
       registry,
+      approvalStore,
     });
 
   it("hidden pipeline-test phrase responds exactly, regardless of context", async () => {
@@ -97,6 +100,7 @@ describe("dispute-intent demo questions (deterministic, per-case)", () => {
         llmClient,
         adapters: commAdapters,
         registry,
+        approvalStore,
       });
       // Gmail isn't enabled for this chat — the reply says so explicitly and still gives the
       // authored per-case summary, never the generic fallback.
@@ -149,7 +153,7 @@ describe("dispute-intent demo questions (deterministic, per-case)", () => {
         llmClient,
         adapters: crmAdapters,
         registry: crmRegistry,
-      });
+        approvalStore,      });
       expect(r.answer).toContain("Sarah Johnson");
       expect(r.answer.toLowerCase()).toContain("pipeline stage");
       expect(r.answer).toContain("Pro Coaching Program");
@@ -166,7 +170,7 @@ describe("dispute-intent demo questions (deterministic, per-case)", () => {
         llmClient,
         adapters: crmAdapters,
         registry: crmRegistry,
-      });
+        approvalStore,      });
       expect(r.answer).toContain("No GoHighLevel contact record");
     });
   });
