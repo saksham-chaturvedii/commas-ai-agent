@@ -12,6 +12,7 @@ import { AgentError, classifyError } from "./agent/errors.js";
 import { StubLlmClient } from "./llm/stubClient.js";
 import { AnthropicLlmClient } from "./llm/anthropicClient.js";
 import { GeminiLlmClient } from "./llm/geminiClient.js";
+import { OpenRouterLlmClient } from "./llm/openrouterClient.js";
 import type { LlmClient } from "./llm/types.js";
 import type { AgentApproveRequest, AgentRunRequest, AgentRunResponse, ConversationTurn, SourceId } from "./types.js";
 // --- shared agent runtime (docs/AI_ASSISTANT_ARCHITECTURE.md) — additive, alongside the legacy
@@ -22,6 +23,7 @@ import { runSharedAgent } from "./agent/runtime/sharedAgent.js";
 import type { DisputeFacts, WorkspaceDisputeSummary } from "./agent/context/model.js";
 import { AnthropicStreamClient } from "./llm/streaming/anthropicStreamClient.js";
 import { GeminiStreamClient } from "./llm/streaming/geminiStreamClient.js";
+import { OpenRouterStreamClient } from "./llm/streaming/openrouterStreamClient.js";
 import { StubStreamClient } from "./llm/streaming/stubStreamClient.js";
 import type { StreamingLlmClient } from "./llm/streaming/types.js";
 
@@ -85,20 +87,28 @@ export async function createApp() {
   const registry: Map<string, RegisteredTool> = await buildToolRegistry(adapters);
 
   // Provider priority: Anthropic (if a key is set — real Claude reasoning, but pay-per-token,
-  // no free tier) > Gemini (if a key is set — genuinely free via Google AI Studio) > the
-  // deterministic stub (always available, zero configuration, still drives every real tool
-  // call/investigation/approval flow end to end — see server/llm/stubClient.ts). Both real
+  // no free tier) > OpenRouter (if a key is set — genuinely free `:free` models, chosen as the
+  // primary free option after Gemini's real free-tier rate limit — 5 requests/minute for
+  // gemini-3.6-flash, confirmed live — proved too tight for a multi-step tool-calling
+  // investigation in one turn) > Gemini (if a key is set — kept as a secondary free option) >
+  // the deterministic stub (always available, zero configuration, still drives every real tool
+  // call/investigation/approval flow end to end — see server/llm/stubClient.ts). All three real
   // clients implement the exact same LlmClient/StreamingLlmClient interfaces the stub does, so
   // the agent runtime never knows which one it's talking to.
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+  const openrouterApiKey = process.env.OPENROUTER_KEY;
   const geminiApiKey = process.env.GEMINI_API_KEY;
   let llmClient: LlmClient;
   let streamingLlmClient: StreamingLlmClient;
-  let llmMode: "anthropic" | "gemini" | "stub";
+  let llmMode: "anthropic" | "openrouter" | "gemini" | "stub";
   if (anthropicApiKey) {
     llmClient = new AnthropicLlmClient(anthropicApiKey);
     streamingLlmClient = new AnthropicStreamClient(anthropicApiKey);
     llmMode = "anthropic";
+  } else if (openrouterApiKey) {
+    llmClient = new OpenRouterLlmClient(openrouterApiKey);
+    streamingLlmClient = new OpenRouterStreamClient(openrouterApiKey);
+    llmMode = "openrouter";
   } else if (geminiApiKey) {
     llmClient = new GeminiLlmClient(geminiApiKey);
     streamingLlmClient = new GeminiStreamClient(geminiApiKey);
@@ -108,9 +118,9 @@ export async function createApp() {
     streamingLlmClient = new StubStreamClient();
     llmMode = "stub";
     console.warn(
-      "[llm] Neither ANTHROPIC_API_KEY nor GEMINI_API_KEY is set — using the deterministic " +
-        "stub LLM. Real tool calls still run for real against connected sources; only the " +
-        "reasoning step is scripted.",
+      "[llm] No ANTHROPIC_API_KEY, OPENROUTER_KEY, or GEMINI_API_KEY is set — using the " +
+        "deterministic stub LLM. Real tool calls still run for real against connected sources; " +
+        "only the reasoning step is scripted.",
     );
   }
   const sessionStore = new SessionStore();

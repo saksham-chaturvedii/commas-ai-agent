@@ -49,10 +49,14 @@ in local dev and in tests) both deploy from this one repo — no separate backen
   - `ANTHROPIC_API_KEY` — optional and **not free** (pay-per-token, no free tier; a key with a
     $0 credit balance authenticates but every real request fails with a billing error — set
     this only once the Anthropic account behind it has credits).
-  - `GEMINI_API_KEY` — optional and **genuinely free** (Google AI Studio, published free-tier
-    rate limits, no credit card). Used only when `ANTHROPIC_API_KEY` is unset — this is the
-    practical free real-LLM option. `GEMINI_MODEL` overrides the default model name if needed.
-  - Without either key, the agent runs on `StubLlmClient`: the same real tool calls,
+  - `OPENROUTER_KEY` — optional and **genuinely free** (OpenRouter's `:free` model variants).
+    Used only when `ANTHROPIC_API_KEY` is unset — this is the practical free real-LLM default,
+    chosen over Gemini after Gemini's real free-tier rate limit (5 requests/minute for
+    gemini-3.6-flash, confirmed live) proved too tight for a multi-step investigation.
+    `OPENROUTER_MODEL` overrides the default model if needed.
+  - `GEMINI_API_KEY` — optional and genuinely free (Google AI Studio), kept as a secondary free
+    option. Used only when neither of the above is set. `GEMINI_MODEL` overrides the default.
+  - Without any of the three, the agent runs on `StubLlmClient`: the same real tool calls,
     multi-source investigation, and approval flow, with deterministic (not model-generated)
     reasoning text — fully functional, zero configuration, zero cost.
   - `COMMAS_MCP_MODE` (defaults to `mock`, safe to leave unset).
