@@ -1,7 +1,11 @@
 import { AgentError } from "../agent/errors.js";
 import type { LlmClient, LlmStepInput, LlmStepResult, ToolCallRecord } from "./types.js";
 
-const DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
+// meta-llama/llama-3.3-70b-instruct:free was pulled from the free tier ("This model is
+// unavailable for free... use this slug instead: meta-llama/llama-3.3-70b-instruct", confirmed
+// live) — replaced with a model confirmed, via OpenRouter's own public /api/v1/models listing,
+// to currently be both free and tool-calling-capable.
+const DEFAULT_MODEL = "google/gemma-4-31b-it:free";
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 /**

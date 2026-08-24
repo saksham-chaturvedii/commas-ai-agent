@@ -3,7 +3,10 @@ import { classifyOpenRouterError } from "../openrouterClient.js";
 import type { ToolCallRecord } from "../types.js";
 import type { StreamStepArgs, StreamStepResult, StreamingLlmClient } from "./types.js";
 
-const DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
+// See server/llm/openrouterClient.ts's comment — the old default was pulled from the free
+// tier; this one is confirmed, via OpenRouter's public /api/v1/models listing, to currently be
+// both free and tool-calling-capable.
+const DEFAULT_MODEL = "google/gemma-4-31b-it:free";
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 /**
