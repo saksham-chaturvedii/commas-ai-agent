@@ -40,7 +40,6 @@ const aiItem: AIEvidenceItem = {
   id: "acc-test-1",
   title: "Portal access log",
   record: "Two logins recorded after purchase.",
-  why: "Shows the customer used the product.",
   sourceType: "activity",
   sourceLabel: "Fathom",
   category: "Access & activity records",
@@ -84,7 +83,7 @@ describe("Evidence checklist accordion", () => {
     expect(screen.queryByText("Portal access log")).not.toBeInTheDocument();
   });
 
-  it("clicking an entry opens the Evidence Detail drawer with title, description, why, and attachments", () => {
+  it("clicking an entry opens the Evidence Detail modal with title, record, and attachments — never a 'Why it matters' section", () => {
     render(
       <ChatStoreProvider>
         <Harness disputeId="2481" seedItem={aiItem} />
@@ -95,10 +94,11 @@ describe("Evidence checklist accordion", () => {
     fireEvent.click(screen.getByText("Portal access log"));
 
     expect(screen.getByText("Evidence detail")).toBeInTheDocument();
-    expect(screen.getByText("Two logins recorded after purchase.")).toBeInTheDocument();
-    expect(screen.getByText("Shows the customer used the product.")).toBeInTheDocument();
+    // Shows in both the accordion row's own record preview and the modal's Record section.
+    expect(screen.getAllByText("Two logins recorded after purchase.").length).toBeGreaterThan(0);
     expect(screen.getAllByText("log-1.pdf").length).toBeGreaterThan(0);
     expect(screen.getAllByText("log-2.png").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Why it matters")).not.toBeInTheDocument();
   });
 
   it("editing title/description in the drawer persists through the real store and updates the accordion row", () => {

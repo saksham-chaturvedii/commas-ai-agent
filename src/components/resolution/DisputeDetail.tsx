@@ -11,6 +11,7 @@ import {
   Receipt,
   Sparkles,
   Check,
+  Trash2,
   X,
 } from "lucide-react";
 import { Badge } from "../shell/Badge";
@@ -20,13 +21,8 @@ import { EvidenceDetailDrawer } from "./EvidenceDetailDrawer";
 import { evidenceCategories, getDispute, type AIEvidenceItem, type EvidenceFileMeta } from "../../lib/disputeData";
 import { formatFileSize } from "../../lib/evidenceUpload";
 import { useChatStore } from "../../hooks/useChatStore";
-import { SOURCES } from "../../lib/mockData";
-import type { SourceId } from "../../lib/types";
+import { sourceIdFromLabel } from "../../lib/mockData";
 import { EvidenceInspectorModal, type InspectableEvidence } from "../chat/EvidenceInspectorModal";
-
-function sourceIdFromLabel(label: string): SourceId {
-  return SOURCES.find((s) => s.name === label)?.id ?? "commas";
-}
 
 /**
  * Dispute Detail page, ported from commas-ai-copilot and evolved: the old prototype's inline
@@ -142,14 +138,18 @@ function ManualEvidenceCard({
   // while it's open is reflected immediately (the live item is looked up from `evidenceItems`
   // below), instead of the drawer showing stale data until it's reopened.
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
-  const { verifyEvidenceItem, updateEvidenceItem } = useChatStore();
+  const { verifyEvidenceItem, updateEvidenceItem, confirmEvidenceProof, removeEvidenceItem } = useChatStore();
 
   const itemsByCategory = new Map<string, AIEvidenceItem[]>();
   for (const item of evidenceItems) {
     itemsByCategory.set(item.category, [...(itemsByCategory.get(item.category) ?? []), item]);
   }
+  // "Fully added" excludes a third-party item still awaiting proof (proofRequired &&
+  // !proofConfirmed) — it has a row in the checklist so the seller can act on it, but neither
+  // the category badge nor the "X of N" count treats it as done until proof is confirmed.
+  const isFullyAdded = (i: AIEvidenceItem) => !i.proofRequired || i.proofConfirmed;
   const addedCount = evidenceCategories.filter(
-    (c) => initialAdded.includes(c.label) || (itemsByCategory.get(c.label)?.length ?? 0) > 0,
+    (c) => initialAdded.includes(c.label) || (itemsByCategory.get(c.label) ?? []).some(isFullyAdded),
   ).length;
   const selectedItem = evidenceItems.find((i) => i.id === selectedItemId) ?? null;
 
@@ -186,7 +186,7 @@ function ManualEvidenceCard({
       <div className="mt-2">
         {evidenceCategories.map((item) => {
           const items = itemsByCategory.get(item.label) ?? [];
-          const isAdded = initialAdded.includes(item.label) || items.length > 0;
+          const isAdded = initialAdded.includes(item.label) || items.some(isFullyAdded);
           const isExpanded = expandedCategories.has(item.label);
           return (
             <div key={item.label} className="py-3 border-t border-[#ebebeb] first:border-t-0">
@@ -237,47 +237,77 @@ function ManualEvidenceCard({
                 <div className="mt-2.5 pl-11">
                   {items.length > 0 ? (
                     <ul className="flex flex-col gap-1.5">
-                      {items.map((si) => (
-                        <li key={si.id}>
-                          {/* A real <button> can't contain AttachmentChip's own <button>s (invalid
-                             * HTML — the browser silently un-nests them, breaking clicks), so this
-                             * row uses role="button" instead, exactly like the category header
-                             * above does for the same reason. */}
-                          <div
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => setSelectedItemId(si.id)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") {
-                                e.preventDefault();
-                                setSelectedItemId(si.id);
-                              }
-                            }}
-                            className="w-full text-left py-2 px-2.5 rounded-lg bg-[#fafafa] border border-[#ebebeb] hover:border-[#d9d9d9] cursor-pointer transition-colors"
-                          >
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <div className="text-[12.5px] font-medium text-[#1a1a1a]">{si.title}</div>
-                              {si.addedBy === "ai" &&
-                                (si.verifiedByHuman ? (
-                                  <Badge variant="success">Reviewed</Badge>
-                                ) : (
-                                  <Badge variant="info">AI found</Badge>
-                                ))}
-                            </div>
-                            <div className="text-[11.5px] text-[#9ca3af] mt-0.5">
-                              {si.sourceLabel}
-                              {si.files.length > 0 ? ` · ${si.files.length} file${si.files.length === 1 ? "" : "s"}` : ""}
-                            </div>
-                            {si.files.length > 0 && (
-                              <div className="flex flex-wrap gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()}>
-                                {si.files.map((f, i) => (
-                                  <AttachmentChip key={`${si.id}-${i}`} file={f} onPreview={setPreviewFile} />
-                                ))}
+                      {items.map((si) => {
+                        const needsProof = Boolean(si.proofRequired) && !si.proofConfirmed;
+                        return (
+                          <li key={si.id}>
+                            {/* A real <button> can't contain AttachmentChip's own <button>s
+                               * (invalid HTML — the browser silently un-nests them, breaking
+                               * clicks), so this row uses role="button" instead, exactly like the
+                               * category header above does for the same reason. */}
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => setSelectedItemId(si.id)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  setSelectedItemId(si.id);
+                                }
+                              }}
+                              className="w-full text-left py-2 px-2.5 rounded-lg bg-[#fafafa] border border-[#ebebeb] hover:border-[#d9d9d9] cursor-pointer transition-colors"
+                            >
+                              <div className="flex items-start gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <div className="text-[12.5px] font-medium text-[#1a1a1a]">{si.title}</div>
+                                    {si.addedBy === "ai" &&
+                                      (si.verifiedByHuman ? (
+                                        <Badge variant="success">Reviewed</Badge>
+                                      ) : (
+                                        <Badge variant="info">AI found</Badge>
+                                      ))}
+                                    {needsProof && <Badge variant="warning">Proof required</Badge>}
+                                  </div>
+                                  <div className="text-[11.5px] text-[#9ca3af] mt-0.5">
+                                    {si.sourceLabel}
+                                    {si.files.length > 0 ? ` · ${si.files.length} file${si.files.length === 1 ? "" : "s"}` : ""}
+                                  </div>
+                                  {si.record && <div className="text-[11.5px] leading-[16px] text-[#6b7280] mt-1 line-clamp-2">{si.record}</div>}
+                                  {needsProof && (
+                                    <div className="text-[11.5px] font-medium text-[#cb6301] mt-1">Attach proof to add this evidence</div>
+                                  )}
+                                  {si.files.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()}>
+                                      {si.files.map((f, i) => (
+                                        <AttachmentChip key={`${si.id}-${i}`} file={f} onPreview={setPreviewFile} />
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                                {!isResolved && (
+                                  <button
+                                    type="button"
+                                    aria-label={`Remove ${si.title}`}
+                                    title="Remove evidence"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const confirmMessage =
+                                        si.files.length > 1
+                                          ? `Remove "${si.title}"? This permanently deletes this evidence entry and its ${si.files.length} attached files.`
+                                          : `Remove "${si.title}"? This permanently deletes this evidence entry.`;
+                                      if (window.confirm(confirmMessage)) removeEvidenceItem(disputeId, si.id);
+                                    }}
+                                    className="flex items-center justify-center w-6 h-6 rounded-md text-[#9ca3af] hover:bg-[#fdecee] hover:text-[var(--color-danger-text)] shrink-0"
+                                  >
+                                    <Trash2 size={13} strokeWidth={1.75} />
+                                  </button>
+                                )}
                               </div>
-                            )}
-                          </div>
-                        </li>
-                      ))}
+                            </div>
+                          </li>
+                        );
+                      })}
                     </ul>
                   ) : (
                     <p className="text-[12.5px] text-[#9ca3af] py-1">Nothing added to this category yet.</p>
@@ -312,13 +342,17 @@ function ManualEvidenceCard({
                   setInspecting({
                     title: selectedItem.title,
                     category: selectedItem.category,
-                    why: selectedItem.why,
                     record: selectedItem.record,
                     sourceLabel: selectedItem.sourceLabel,
                     sourceId: sourceIdFromLabel(selectedItem.sourceLabel),
                   })
               : undefined
           }
+          onConfirmProof={(files) => confirmEvidenceProof(disputeId, selectedItem.id, files)}
+          onRemove={() => {
+            removeEvidenceItem(disputeId, selectedItem.id);
+            setSelectedItemId(null);
+          }}
         />
       )}
     </div>

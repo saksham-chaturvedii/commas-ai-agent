@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { X, Pencil, Check, ImageIcon, FileText } from "lucide-react";
+import { X, Pencil, Check, Trash2, ImageIcon, FileText, TriangleAlert } from "lucide-react";
 import { Badge } from "../shell/Badge";
+import { EvidenceUploadArea } from "./EvidenceUploadArea";
+import { useEvidenceFiles } from "../../lib/evidenceUpload";
 import type { AIEvidenceItem, EvidenceFileMeta } from "../../lib/disputeData";
 
 function DrawerAttachmentChip({ file, onPreview }: { file: EvidenceFileMeta; onPreview: (file: EvidenceFileMeta) => void }) {
@@ -21,11 +23,18 @@ function DrawerAttachmentChip({ file, onPreview }: { file: EvidenceFileMeta; onP
 }
 
 /**
- * Right-side detail drawer for one evidence entry — the "case file" view: full title,
- * description, why-it-matters, and every attachment, none of which fit in the accordion row's
- * compact preview. Edit is available only when `editable` (the caller already gates this on
+ * Evidence Detail — a centered modal (not a side drawer; see the module-level comment history
+ * for why: a translucent right-side panel let background content bleed through distractingly)
+ * showing one evidence entry's full case-file detail: title, category/source, the record
+ * itself, and every attachment. Edit is available only when `editable` (the caller gates this on
  * "dispute still active" — DisputeDetail's `isResolved`), and only for the two free-text fields
- * (title/record) — attachments and category are structural, not something this drawer edits.
+ * (title/record) — attachments and category are structural, not something this modal edits
+ * directly (attachments are replaced wholesale via the proof-upload flow below, never patched).
+ *
+ * Third-party-sourced evidence (`proofRequired`) that hasn't been confirmed yet shows an upload
+ * flow instead of a plain attachments list — the seller must attach real proof and explicitly
+ * confirm before it counts as fully added (native Commas evidence and seller-manual entries never
+ * carry `proofRequired`, so they skip straight to the normal attachments view).
  */
 export function EvidenceDetailDrawer({
   item,
@@ -35,6 +44,8 @@ export function EvidenceDetailDrawer({
   onPreviewFile,
   onMarkReviewed,
   onInspectSource,
+  onConfirmProof,
+  onRemove,
 }: {
   item: AIEvidenceItem;
   editable: boolean;
@@ -46,19 +57,30 @@ export function EvidenceDetailDrawer({
   /** Opens the existing source-record inspector (Fathom call, Gmail thread, ...) — only offered
    * for AI-found items, same as the accordion row's "Inspect" link did before this change. */
   onInspectSource?: () => void;
+  /** Attaches the confirmed proof files and marks this item fully added — only rendered (and
+   * only ever called) while `item.proofRequired && !item.proofConfirmed`. */
+  onConfirmProof: (files: EvidenceFileMeta[]) => void;
+  /** Permanently removes this evidence entry. Always offered while `editable` — "Added" is
+   * never a locked state before the dispute response is submitted. */
+  onRemove: () => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(item.title);
   const [record, setRecord] = useState(item.record);
+  const { files, notice, addFiles, removeFile, retryFile, allReady } = useEvidenceFiles();
 
-  // A different entry was clicked while the drawer was open — reset local edit state to match,
+  const needsProof = Boolean(item.proofRequired) && !item.proofConfirmed;
+  const readyProofFiles = files.filter((f) => f.status === "ready");
+  const canConfirmProof = readyProofFiles.length > 0 && allReady;
+
+  // A different entry was clicked while the modal was open — reset local edit state to match,
   // rather than carrying over stale text or a stuck "editing" mode from the previous item.
   useEffect(() => {
     setIsEditing(false);
     setTitle(item.title);
     setRecord(item.record);
     // Deliberately keyed on item.id only — the live item's title/record are read once, when
-    // the drawer switches to a (possibly new) item; re-running this on every store update to
+    // the modal switches to a (possibly new) item; re-running this on every store update to
     // the same item would clobber in-progress local edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.id]);
@@ -76,14 +98,38 @@ export function EvidenceDetailDrawer({
     setIsEditing(false);
   };
 
+  const confirmProof = () => {
+    if (!canConfirmProof) return;
+    onConfirmProof(
+      readyProofFiles.map((f) => ({
+        name: f.name,
+        type: f.file.type || f.extension,
+        size: f.size,
+        mockUrl: f.previewUrl ?? `mock://evidence/${f.id}`,
+      })),
+    );
+  };
+
+  const handleRemove = () => {
+    const confirmMessage =
+      item.files.length > 1
+        ? `Remove "${item.title}"? This permanently deletes this evidence entry and its ${item.files.length} attached files.`
+        : `Remove "${item.title}"? This permanently deletes this evidence entry.`;
+    if (window.confirm(confirmMessage)) onRemove();
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" onMouseDown={onClose}>
-      <div style={{ background: "rgba(0,0,0,0.15)" }} className="absolute inset-0" />
-      <aside
-        className="relative main-surface flex flex-col w-[400px] max-w-[92vw] h-full shrink-0 overflow-hidden shadow-[-8px_0_30px_rgba(0,0,0,0.12)]"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-6"
+      style={{ background: "rgba(0,0,0,0.55)" }}
+      onMouseDown={onClose}
+    >
+      <div
+        className="bg-white w-[500px] max-w-[92vw] max-h-[88vh] flex flex-col"
+        style={{ borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 h-14 border-b border-black/[0.06] shrink-0">
+        <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-[#ebebeb] shrink-0">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-[#9ca3af]">Evidence detail</div>
           <button
             type="button"
@@ -97,9 +143,12 @@ export function EvidenceDetailDrawer({
 
         <div className="px-5 py-4 flex flex-col gap-4 overflow-y-auto flex-1">
           <div>
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center justify-between mb-1 gap-2">
               <label className="text-[11px] font-semibold uppercase tracking-wide text-[#9ca3af]">Title</label>
-              {item.addedBy === "ai" && (item.verifiedByHuman ? <Badge variant="success">Reviewed</Badge> : <Badge variant="info">AI found</Badge>)}
+              <div className="flex items-center gap-1.5 shrink-0">
+                {item.addedBy === "ai" && (item.verifiedByHuman ? <Badge variant="success">Reviewed</Badge> : <Badge variant="info">AI found</Badge>)}
+                {needsProof && <Badge variant="warning">Proof required</Badge>}
+              </div>
             </div>
             {isEditing ? (
               <input
@@ -126,7 +175,7 @@ export function EvidenceDetailDrawer({
           </div>
 
           <div>
-            <label className="block text-[11px] font-semibold uppercase tracking-wide text-[#9ca3af] mb-1">Description</label>
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-[#9ca3af] mb-1">Record</label>
             {isEditing ? (
               <textarea
                 value={record}
@@ -150,27 +199,50 @@ export function EvidenceDetailDrawer({
             )}
           </div>
 
-          {item.why && (
+          {needsProof ? (
             <div>
-              <label className="block text-[11px] font-semibold uppercase tracking-wide text-[#9ca3af] mb-1">Why it matters</label>
-              <p className="text-[13.5px] leading-[19px] text-[#1a1a1a]">{item.why}</p>
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <TriangleAlert size={13} strokeWidth={2} className="text-[#cb6301]" />
+                <label className="text-[11px] font-semibold uppercase tracking-wide text-[#cb6301]">Supporting proof required</label>
+              </div>
+              <p className="text-[12.5px] leading-[18px] text-[#6b7280] mb-2">
+                This was found in {item.sourceLabel}, an external app — attach a screenshot or file from it before this counts as
+                added to the case.
+              </p>
+              {editable ? (
+                <>
+                  <EvidenceUploadArea files={files} notice={notice} onFilesAdded={addFiles} onRemove={removeFile} onRetry={retryFile} />
+                  <button
+                    type="button"
+                    className="btn-dark w-full mt-3"
+                    style={{ height: 38, opacity: canConfirmProof ? 1 : 0.4, cursor: canConfirmProof ? "pointer" : "not-allowed" }}
+                    disabled={!canConfirmProof}
+                    onClick={confirmProof}
+                  >
+                    <Check size={14} strokeWidth={2.5} />
+                    Confirm evidence
+                  </button>
+                </>
+              ) : (
+                <p className="text-[12.5px] text-[#9ca3af]">No proof was attached before this dispute was resolved.</p>
+              )}
+            </div>
+          ) : (
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wide text-[#9ca3af] mb-1.5">
+                Attachments{item.files.length > 0 ? ` (${item.files.length})` : ""}
+              </label>
+              {item.files.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {item.files.map((f, i) => (
+                    <DrawerAttachmentChip key={`${item.id}-${i}`} file={f} onPreview={onPreviewFile} />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[12.5px] text-[#9ca3af]">No files attached.</p>
+              )}
             </div>
           )}
-
-          <div>
-            <label className="block text-[11px] font-semibold uppercase tracking-wide text-[#9ca3af] mb-1.5">
-              Attachments{item.files.length > 0 ? ` (${item.files.length})` : ""}
-            </label>
-            {item.files.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {item.files.map((f, i) => (
-                  <DrawerAttachmentChip key={`${item.id}-${i}`} file={f} onPreview={onPreviewFile} />
-                ))}
-              </div>
-            ) : (
-              <p className="text-[12.5px] text-[#9ca3af]">No files attached.</p>
-            )}
-          </div>
 
           {item.addedBy === "ai" && onInspectSource && (
             <button
@@ -185,33 +257,44 @@ export function EvidenceDetailDrawer({
 
         {editable && (
           <div className="flex items-center gap-2 px-5 py-4 border-t border-[#ebebeb] shrink-0">
-            {isEditing ? (
-              <>
-                <button type="button" className="btn-secondary flex-1" style={{ height: 38 }} onClick={() => setIsEditing(false)}>
-                  Cancel
-                </button>
-                <button type="button" className="btn-dark flex-1" style={{ height: 38 }} onClick={save}>
-                  <Check size={14} strokeWidth={2.5} />
-                  Save
-                </button>
-              </>
-            ) : (
-              <>
-                <button type="button" className="btn-secondary flex-1" style={{ height: 38 }} onClick={() => setIsEditing(true)}>
-                  <Pencil size={13} strokeWidth={1.75} />
-                  Edit
-                </button>
-                {item.addedBy === "ai" && !item.verifiedByHuman && onMarkReviewed && (
-                  <button type="button" className="btn-dark flex-1" style={{ height: 38 }} onClick={onMarkReviewed}>
-                    <Check size={14} strokeWidth={2.5} />
-                    Mark as reviewed
+            <button
+              type="button"
+              onClick={handleRemove}
+              aria-label="Remove evidence"
+              title="Remove evidence"
+              className="flex items-center justify-center w-9 h-9 rounded-lg text-[#9ca3af] hover:bg-[#fdecee] hover:text-[var(--color-danger-text)] cursor-pointer shrink-0"
+            >
+              <Trash2 size={15} strokeWidth={1.75} />
+            </button>
+            <div className="flex-1" />
+            {!needsProof &&
+              (isEditing ? (
+                <>
+                  <button type="button" className="btn-secondary" style={{ height: 38 }} onClick={() => setIsEditing(false)}>
+                    Cancel
                   </button>
-                )}
-              </>
-            )}
+                  <button type="button" className="btn-dark" style={{ height: 38 }} onClick={save}>
+                    <Check size={14} strokeWidth={2.5} />
+                    Save
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button type="button" className="btn-secondary" style={{ height: 38 }} onClick={() => setIsEditing(true)}>
+                    <Pencil size={13} strokeWidth={1.75} />
+                    Edit
+                  </button>
+                  {item.addedBy === "ai" && !item.verifiedByHuman && onMarkReviewed && (
+                    <button type="button" className="btn-dark" style={{ height: 38 }} onClick={onMarkReviewed}>
+                      <Check size={14} strokeWidth={2.5} />
+                      Mark as reviewed
+                    </button>
+                  )}
+                </>
+              ))}
           </div>
         )}
-      </aside>
+      </div>
     </div>
   );
 }

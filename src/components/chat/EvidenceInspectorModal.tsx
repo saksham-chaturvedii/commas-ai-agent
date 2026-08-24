@@ -6,7 +6,6 @@ import { SourceIcon } from "./SourceIcon";
 export interface InspectableEvidence {
   title: string;
   category: string;
-  why: string;
   record: string;
   sourceLabel: string;
   sourceId: SourceId;
@@ -144,7 +143,7 @@ function Field({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** "Inspect evidence" — shows what the evidence is, why it matters, and (when the caller has
+/** "Inspect evidence" — shows what the evidence record actually is, and (when the caller has
  * it) a source-shaped view of the underlying record, standing in for "open the underlying
  * source/demo view" without a full separate app per connector. Read-only: this modal never
  * approves, rejects, or otherwise mutates anything — those actions live on the card that opened
@@ -185,11 +184,6 @@ export function EvidenceInspectorModal({ evidence, onClose }: { evidence: Inspec
         <div className="px-5 py-4 flex flex-col gap-4 overflow-y-auto">
           <div className="text-[12px] text-[#9ca3af]">
             {evidence.category} · {evidence.sourceLabel}
-          </div>
-
-          <div>
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-[#9ca3af] mb-1">Why it matters</div>
-            <p className="text-[13.5px] leading-[19px] text-[#1a1a1a]">{evidence.why}</p>
           </div>
 
           <div>

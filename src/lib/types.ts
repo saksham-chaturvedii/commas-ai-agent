@@ -89,7 +89,6 @@ export interface ProposedEvidenceCandidate {
   category: string;
   title: string;
   record: string;
-  why: string;
   sourceType: string;
   sourceLabel: string;
 }
@@ -122,7 +121,6 @@ export interface EvidenceFinding {
   category: string;
   title: string;
   record: string;
-  why: string;
   sourceType: string;
   sourceLabel: string;
   sourceId: SourceId;

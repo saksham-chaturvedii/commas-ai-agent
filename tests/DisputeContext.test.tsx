@@ -17,7 +17,6 @@ function evidenceItem(category: string, overrides: Partial<AIEvidenceItem> = {})
     id: `ev-${Math.random()}`,
     title: "Some evidence",
     record: "record",
-    why: "why",
     sourceType: "manual",
     sourceLabel: "Manual",
     addedBy: "seller",

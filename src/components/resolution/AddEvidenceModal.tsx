@@ -57,7 +57,6 @@ export function AddEvidenceModal({
       id: `manual-${manualIdCounter}`,
       title: title.trim(),
       record: description.trim() || `${typeMeta.label} added manually by the seller.`,
-      why: "Added by the seller to support the response — review the entered details before relying on it.",
       sourceType: "manual",
       sourceLabel: `Added by you → ${typeMeta.label}`,
       addedBy: "seller",

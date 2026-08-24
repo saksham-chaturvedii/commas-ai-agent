@@ -62,7 +62,6 @@ const INVESTIGATION_PLAN = {
         category: "Access & activity records",
         title: "Fathom call — 42-minute session",
         record: "Walked Sarah through the portal, first-week goals, and how to book live sessions.",
-        why: "Shows direct engagement with the product or service around the time of purchase.",
         sourceType: "activity",
         sourceLabel: "Fathom",
         sourceId: "fathom",
@@ -130,6 +129,9 @@ describe("investigation connected to the UI", () => {
     expect(screen.getByText("Recommended next action")).toBeInTheDocument();
     // No fabricated contradictions when the investigation found none.
     expect(screen.queryByText("Potential contradictions")).not.toBeInTheDocument();
+    // "Why it matters" was removed from the product entirely.
+    expect(screen.queryByText("Why it matters")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Why it matters:/)).not.toBeInTheDocument();
 
     // The completed step checklist shows real, result-aware labels — not the generic in-flight
     // gerund, and not a static "done" rephrasing.
@@ -174,7 +176,6 @@ describe("AI found vs. human verified — evidence already in the case", () => {
   const baseItem: Omit<AIEvidenceItem, "id" | "addedBy"> = {
     title: "Fathom call — 42-minute session",
     record: "Walked Sarah through the portal.",
-    why: "Shows direct engagement with the product.",
     sourceType: "activity",
     sourceLabel: "Fathom",
     category: "Access & activity records",

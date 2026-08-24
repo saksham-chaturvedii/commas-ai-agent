@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Check, X, FileText } from "lucide-react";
 import type { ProposedAction } from "../../lib/types";
 import { getDispute } from "../../lib/disputeData";
+import { isThirdPartyEvidenceSource } from "../../lib/mockData";
 import { useChatStore } from "../../hooks/useChatStore";
 
 /**
@@ -95,9 +96,16 @@ export function ProposedActionCard({ action, chatId, messageId }: { action: Prop
                 aria-label={`Include ${item.title}`}
               />
               <div className="min-w-0">
-                <div className="text-[12.5px] font-medium text-[#1a1a1a]">{item.title}</div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <div className="text-[12.5px] font-medium text-[#1a1a1a]">{item.title}</div>
+                  {isThirdPartyEvidenceSource(item.sourceLabel) && (
+                    <span className="inline-flex items-center h-5 px-2 rounded-full text-[10.5px] font-semibold bg-[#ffefdf] text-[#cb6301]">
+                      Proof required after adding
+                    </span>
+                  )}
+                </div>
                 <div className="text-[11px] text-[#9ca3af] mt-0.5">{item.category} · {item.sourceLabel}</div>
-                <div className="text-[12px] leading-[17px] text-[#6b7280] mt-1">{item.why}</div>
+                <div className="text-[12px] leading-[17px] text-[#6b7280] mt-1">{item.record}</div>
               </div>
             </li>
           ))}

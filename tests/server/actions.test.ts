@@ -61,7 +61,7 @@ describe("buildProposedAction", () => {
     const action = buildProposedAction("2481", "propose_add_evidence", {
       summary: "I found 1 strong evidence item.",
       items: [
-        { category: "Customer communications", title: "Gmail thread", record: "...", why: "...", sourceType: "communication", sourceLabel: "Gmail" },
+        { category: "Customer communications", title: "Gmail thread", record: "...", sourceType: "communication", sourceLabel: "Gmail" },
       ],
     });
     expect(action).toEqual({
@@ -69,7 +69,7 @@ describe("buildProposedAction", () => {
       type: "add_evidence",
       disputeId: "2481",
       summary: "I found 1 strong evidence item.",
-      items: [{ category: "Customer communications", title: "Gmail thread", record: "...", why: "...", sourceType: "communication", sourceLabel: "Gmail" }],
+      items: [{ category: "Customer communications", title: "Gmail thread", record: "...", sourceType: "communication", sourceLabel: "Gmail" }],
       status: "pending",
     });
   });

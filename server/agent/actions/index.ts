@@ -40,11 +40,10 @@ export const PROPOSE_ADD_EVIDENCE_TOOL: LlmToolDef = {
             category: { type: "string", description: "One of the dispute's evidence checklist category labels." },
             title: { type: "string" },
             record: { type: "string", description: "The specific fact/record this item cites." },
-            why: { type: "string", description: "Why this supports the seller's case." },
             sourceType: { type: "string", enum: ["transaction", "activity", "product", "terms", "communication", "manual"] },
             sourceLabel: { type: "string", description: "Where this came from, e.g. \"Gmail\", \"Commas\", \"Fathom\"." },
           },
-          required: ["category", "title", "record", "why", "sourceType", "sourceLabel"],
+          required: ["category", "title", "record", "sourceType", "sourceLabel"],
         },
       },
     },
@@ -97,7 +96,6 @@ export function buildProposedAction(disputeId: string, toolName: string, input: 
         typeof r.category !== "string" ||
         typeof r.title !== "string" ||
         typeof r.record !== "string" ||
-        typeof r.why !== "string" ||
         typeof r.sourceType !== "string" ||
         typeof r.sourceLabel !== "string"
       ) {
@@ -107,7 +105,6 @@ export function buildProposedAction(disputeId: string, toolName: string, input: 
         category: r.category,
         title: r.title,
         record: r.record,
-        why: r.why,
         sourceType: r.sourceType,
         sourceLabel: r.sourceLabel,
       });

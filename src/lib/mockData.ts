@@ -52,6 +52,27 @@ export const SOURCES: SourceInfo[] = [
   },
 ];
 
+/** Best-effort match of a free-text `sourceLabel` (e.g. "Fathom", "Commas — Transaction
+ * history", "Added by you → Product description") back to the connector it names — checks
+ * whether the label starts with (or exactly equals) a known source's display name. Falls back
+ * to "commas" (the primary/first-party source) when nothing matches, so an unrecognized label
+ * is never misclassified as third-party. Shared by DisputeDetail's source-inspector wiring and
+ * useChatStore's evidence-approval flow, so both agree on the exact same mapping. */
+export function sourceIdFromLabel(label: string): SourceInfo["id"] {
+  const match = SOURCES.find((s) => label === s.name || label.startsWith(`${s.name} `) || label.startsWith(`${s.name} —`));
+  return match?.id ?? "commas";
+}
+
+/** Third-party evidence (Fathom, Gmail, Zoom, GoHighLevel/CRM, Google Calendar) needs the
+ * seller's own supporting proof before it counts as fully added — the seller is relying on
+ * external information as supporting evidence, not a record Commas already holds. Native Commas
+ * data (sourceLabel "Commas" or "Commas — ...") and the seller's own manual entries (sourceLabel
+ * "Added by you → ...", which never matches any connector name and falls back to "commas" here)
+ * are exempt. */
+export function isThirdPartyEvidenceSource(sourceLabel: string): boolean {
+  return sourceIdFromLabel(sourceLabel) !== "commas";
+}
+
 /** Default per-chat scope: every currently connected source. */
 export const DEFAULT_ENABLED_SOURCES = ["commas", "google-calendar", "zoom", "fathom"] as const;
 

@@ -114,7 +114,6 @@ export const DISPUTES: DisputeCase[] = [
         record:
           "Both charges for the Elite Mentorship Package on August 8, 2026 — txn_5a2d81ffec and its duplicate, " +
           "9 seconds apart, same cart and payment method.",
-        why: "Proves this was a checkout retry, not two intentional purchases.",
         sourceType: "transaction",
         sourceLabel: "Commas — Transaction history",
         addedBy: "seller",
@@ -128,7 +127,6 @@ export const DISPUTES: DisputeCase[] = [
         id: "seed-2417-2",
         title: "Checkout retry log",
         record: "Server log showing the payment form was resubmitted after a timeout at 11:47:02, producing the second charge.",
-        why: "Explains the mechanism behind the duplicate — corroborates the two receipts.",
         sourceType: "activity",
         sourceLabel: "Commas — Checkout logs",
         addedBy: "seller",
@@ -139,7 +137,6 @@ export const DISPUTES: DisputeCase[] = [
         id: "seed-2417-3",
         title: "Elena's support email",
         record: "Elena's own August 10 email flagging the double charge, with both receipts attached — sent before she filed the dispute.",
-        why: "Shows good-faith customer contact and confirms the seller was already resolving it.",
         sourceType: "communication",
         sourceLabel: "Added by you — Customer communications",
         addedBy: "seller",
@@ -169,7 +166,6 @@ export const DISPUTES: DisputeCase[] = [
         id: "seed-2455-1",
         title: "Transaction receipt",
         record: "Confirms the $249.00 charge for the Growth Accelerator Course succeeded on August 14, 2026.",
-        why: "Proves the purchase completed — but delivery/engagement evidence is still missing for this case.",
         sourceType: "transaction",
         sourceLabel: "Commas — Transaction history",
         addedBy: "seller",
@@ -204,7 +200,6 @@ export const DISPUTES: DisputeCase[] = [
         id: "seed-2390-1",
         title: "Original transaction record",
         record: "Confirms the $349.00 charge for the Pro Coaching Program succeeded on July 30, 2026.",
-        why: "Establishes the purchase actually completed — a prerequisite for any delivery/engagement argument.",
         sourceType: "transaction",
         sourceLabel: "Commas — Transaction history",
         addedBy: "seller",
@@ -217,7 +212,6 @@ export const DISPUTES: DisputeCase[] = [
         id: "seed-2390-2",
         title: "Portal login history",
         record: "18 logins recorded between August 3–8, 2026, showing consistent engagement with course content after purchase.",
-        why: "Directly contradicts a \"product not received\" claim — the customer was actively using the product.",
         sourceType: "activity",
         sourceLabel: "Commas — Access records",
         addedBy: "seller",
@@ -230,7 +224,6 @@ export const DISPUTES: DisputeCase[] = [
         id: "seed-2390-3",
         title: "Onboarding call attendance",
         record: "Signed attendance record and a screenshot confirming Priya joined and participated in the August 4 onboarding call.",
-        why: "Independent, seller-uploaded corroboration of engagement beyond the platform's own login logs.",
         sourceType: "communication",
         sourceLabel: "Added by you — Customer communications",
         addedBy: "seller",
@@ -254,7 +247,6 @@ export const DISPUTES: DisputeCase[] = [
         id: "seed-2390-4",
         title: "Program listing at time of purchase",
         record: "Screenshot of the Pro Coaching Program offer page as shown to Priya at checkout on July 30, 2026.",
-        why: "Shows what was actually promised, for comparison against what was delivered.",
         sourceType: "product",
         sourceLabel: "Added by you — Product description",
         addedBy: "seller",
@@ -335,7 +327,6 @@ export type AIEvidenceItem = {
   id: string;
   title: string;
   record: string;
-  why: string;
   sourceType: EvidenceSourceType;
   sourceLabel: string;
   sourceAnchor?: string;
@@ -350,6 +341,18 @@ export type AIEvidenceItem = {
    * Undefined/false render identically ("AI found" — unverified); only `addedBy === "ai"` items
    * show either badge at all, since a seller-uploaded item was never an AI claim to verify. */
   verifiedByHuman?: boolean;
+  /** True when this item was sourced from a third-party connected app (Fathom, Gmail, Zoom,
+   * GoHighLevel/CRM, …) rather than Commas' own first-party record — such evidence needs the
+   * seller's own supporting proof before it counts as fully added, since the seller is relying
+   * on external information rather than a record the system already holds. Never set for
+   * Commas-sourced AI evidence or seller-added manual items (both already have — or ARE — their
+   * own proof). Set once, at creation (useChatStore's `resolveProposedAction`); never changes. */
+  proofRequired?: boolean;
+  /** Set once the seller has attached at least one proof file and explicitly confirmed. Always
+   * true for items where `proofRequired` is falsy (nothing to confirm). While `proofRequired &&
+   * !proofConfirmed`, the item is "AI found — proof required": visible in the checklist, but not
+   * counted toward a category's "Added" state until confirmed. */
+  proofConfirmed?: boolean;
 };
 
 export const evidenceCategories = [

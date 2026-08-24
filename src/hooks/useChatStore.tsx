@@ -10,8 +10,16 @@ import type {
   SourceId,
   SourceInfo,
 } from "../lib/types";
-import { CREDIT_COSTS, creditCostForDisputeTurn, DEFAULT_ENABLED_SOURCES, INITIAL_CREDITS, SEED_CHATS, SOURCES } from "../lib/mockData";
-import { DISPUTES, disputesNeedingAttention, type AIEvidenceItem, type EvidenceSourceType } from "../lib/disputeData";
+import {
+  CREDIT_COSTS,
+  creditCostForDisputeTurn,
+  DEFAULT_ENABLED_SOURCES,
+  INITIAL_CREDITS,
+  isThirdPartyEvidenceSource,
+  SEED_CHATS,
+  SOURCES,
+} from "../lib/mockData";
+import { DISPUTES, disputesNeedingAttention, type AIEvidenceItem, type EvidenceFileMeta, type EvidenceSourceType } from "../lib/disputeData";
 import {
   runAgentTurn,
   approveAgentAction,
@@ -200,6 +208,18 @@ interface ChatStoreValue {
    * drawer's only mutation, available only while the dispute is still active (the drawer itself
    * enforces that; this setter has no opinion on dispute status). */
   updateEvidenceItem: (disputeId: string, itemId: string, patch: { title: string; record: string }) => void;
+  /** Attaches supporting proof files to a third-party-sourced evidence item and marks it
+   * `proofConfirmed` — the only way a `proofRequired` item moves from "AI found, awaiting
+   * proof" to fully added. Requires at least one file; a no-op otherwise (the drawer's own
+   * "Confirm evidence" button is disabled until then, so this is a second line of defense, not
+   * the only one). */
+  confirmEvidenceProof: (disputeId: string, itemId: string, files: EvidenceFileMeta[]) => void;
+  /** Permanently removes one evidence entry (and its attachments) from a dispute's checklist —
+   * "Added" is never a locked state while the dispute is still active. Works identically for
+   * AI-found, manual, Commas-native, and proof-confirmed third-party items; the category-level
+   * "Added"/"Not added" badge and the "X of N" count are pure derivations from `evidenceItems`,
+   * so removing the last item in a category reverts it automatically, no separate bookkeeping. */
+  removeEvidenceItem: (disputeId: string, itemId: string) => void;
   /** The seller's editable response draft per dispute — previously local, ephemeral state
    * inside DisputeDetail; lifted here so the chat's `propose_draft_response` approval flow can
    * set it too, and so it survives navigating away from and back to the dispute detail page. */
@@ -736,6 +756,21 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
+  const confirmEvidenceProof = useCallback((disputeId: string, itemId: string, files: EvidenceFileMeta[]) => {
+    if (files.length === 0) return;
+    setEvidenceByDispute((prev) => ({
+      ...prev,
+      [disputeId]: (prev[disputeId] ?? []).map((item) => (item.id === itemId ? { ...item, files, proofConfirmed: true } : item)),
+    }));
+  }, []);
+
+  const removeEvidenceItem = useCallback((disputeId: string, itemId: string) => {
+    setEvidenceByDispute((prev) => ({
+      ...prev,
+      [disputeId]: (prev[disputeId] ?? []).filter((item) => item.id !== itemId),
+    }));
+  }, []);
+
   const setResponseDraft = useCallback((disputeId: string, text: string) => {
     setResponseDraftByDispute((prev) => ({ ...prev, [disputeId]: text }));
   }, []);
@@ -769,11 +804,16 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
           const items = selectedIndices ? action.items.filter((_, i) => selectedIndices.includes(i)) : action.items;
           addedCount = items.length;
           for (const candidate of items) {
+            // Third-party evidence (Fathom, Gmail, Zoom, GoHighLevel/CRM, ...) needs the
+            // seller's own supporting proof before it counts as fully added — the seller is
+            // relying on external information, not a record Commas already holds. Native
+            // Commas evidence needs no such gate: the underlying record already exists in the
+            // system of record.
+            const proofRequired = isThirdPartyEvidenceSource(candidate.sourceLabel);
             addEvidenceItem(action.disputeId, {
               id: newId("ai-evidence"),
               title: candidate.title,
               record: candidate.record,
-              why: candidate.why,
               sourceType: candidate.sourceType as EvidenceSourceType,
               sourceLabel: candidate.sourceLabel,
               addedBy: "ai",
@@ -783,6 +823,8 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
               // implicitly verified. Only an explicit "Mark as verified" click (verifyEvidenceItem)
               // sets this.
               verifiedByHuman: false,
+              proofRequired,
+              proofConfirmed: !proofRequired,
             });
           }
         } else if (action.type === "draft_response") {
@@ -905,6 +947,8 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       addEvidenceItem,
       verifyEvidenceItem,
       updateEvidenceItem,
+      confirmEvidenceProof,
+      removeEvidenceItem,
       responseDraftByDispute,
       setResponseDraft,
       resolveProposedAction,
@@ -935,6 +979,8 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       addEvidenceItem,
       verifyEvidenceItem,
       updateEvidenceItem,
+      confirmEvidenceProof,
+      removeEvidenceItem,
       responseDraftByDispute,
       setResponseDraft,
       resolveProposedAction,

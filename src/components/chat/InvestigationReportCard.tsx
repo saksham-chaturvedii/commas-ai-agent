@@ -51,7 +51,7 @@ export function InvestigationReportCard({ report }: { report: InvestigationRepor
                     <span className="text-[12.5px] font-medium text-[#1a1a1a]">{item.title}</span>
                   </div>
                   <div className="text-[11px] text-[#9ca3af] mt-0.5">{item.category}</div>
-                  <p className="text-[12px] leading-[17px] text-[#6b7280] mt-1">Why it matters: {item.why}</p>
+                  <p className="text-[12px] leading-[17px] text-[#6b7280] mt-1">{item.record}</p>
                   <button
                     type="button"
                     className="inline-flex items-center gap-1 mt-1.5 text-[12px] font-medium text-[var(--color-agent-accent)] cursor-pointer"
@@ -59,7 +59,6 @@ export function InvestigationReportCard({ report }: { report: InvestigationRepor
                       setInspecting({
                         title: item.title,
                         category: item.category,
-                        why: item.why,
                         record: item.record,
                         sourceLabel: item.sourceLabel,
                         sourceId: item.sourceId,
