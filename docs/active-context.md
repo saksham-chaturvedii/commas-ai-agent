@@ -1,6 +1,25 @@
 # Commas AI Agent — Active Context
 
-**Last updated:** 2026-08-21 · **Updated by:** Claude (Audit implementation pass — P0/P1 + GoHighLevel branding)
+**Last updated:** 2026-08-25 · **Updated by:** Claude (Production deployment + Evidence UI overhaul: source-reference chips, review-state removal)
+
+> **The prototype is now live in production, password-protected, at a real custom domain, on
+> a genuinely free LLM.** Deployed to Vercel at **addmorecommas.com** behind HTTP Basic Auth
+> (password `,,,`). The LLM provider chain is `ANTHROPIC_API_KEY` > `OPENROUTER_KEY` >
+> `GEMINI_API_KEY` > deterministic stub; **OpenRouter is what's actually live** (model
+> `nvidia/nemotron-3-super-120b-a12b:free`, after two other free models were found retired/
+> congested), because Anthropic and Gemini were either unavailable or too rate-limited for a
+> demo. See "Production Deployment" below for the full account, including two live-breaking
+> bugs this pass caught and fixed (an em-dash in the auth header, a Vercel catch-all routing
+> gap). The repo also moved to a **private GitHub remote** this pass — Open Question 3 (no
+> remote existed) is resolved.
+
+> **The Resolution Center evidence experience was substantially reworked**: source provenance
+> is now a connector-agnostic chip component (no more per-connector hardcoding, no more
+> "Inspect underlying source" text), and the evidence review/approval state (`verifiedByHuman`,
+> "Mark as reviewed", "AI found" badge on added items) was removed entirely in favor of a
+> single Edit/Delete lifecycle via a 3-dot row menu. See "Evidence UI Overhaul" below for the
+> full account. 231/231 tests pass; typecheck/lint/build all clean; verified live in production
+> via API health checks (browser automation wasn't available for this project this session).
 
 > **The PRODUCT_READINESS_AUDIT.md P0/P1 recommendations are implemented** (see "Audit
 > Implementation Pass" below): all 8 P0 answer-quality/rendering defects fixed, Phase-2 state
@@ -1651,6 +1670,224 @@ dispute chat's Sources menu shows "GoHighLevel" with no bare "CRM" anywhere on t
 draining credits to 0/300 via the demo buttons then clicking "Reset all demo data" restores
 300/300 credits after reload. `npx tsc -b`, `npx vitest run` (94/94) both clean.
 
+# Production Deployment (2026-08-2x, most recent phase before the Evidence UI Overhaul)
+
+The prototype moved from "runs locally" to "live on the internet, password-gated, on a real
+domain, on a real (free) LLM" this pass. Repo moved to a **private GitHub remote** —
+`Open Question 3` from earlier in this file is resolved.
+
+## What was built
+
+- **`api/index.ts`** — Vercel serverless entry point. Must export a Web-standard
+  `async function fetch(req: Request)` (named export, from `hono/vercel`'s `handle()`) — a
+  legacy `(req, res)` default export **silently hangs every request** on Vercel's Node
+  runtime. `createApp()` is memoized across invocations.
+- **`vercel.json`** — explicit `{"rewrites": [{"source": "/api/(.*)", "destination": "/api"}]}`.
+  Vercel's filesystem-based `api/[...path].ts` catch-all convention was tried first and found
+  to **only match single path segments in production** (worked for `/api/health`, broke for
+  `/api/agent/stream`) — not documented behavior, discovered live. The explicit rewrite is the
+  fix and is now the required pattern for any new API route.
+- **`middleware.ts`** — Vercel Edge Middleware, HTTP Basic Auth checked against
+  `process.env.SITE_PASSWORD`. **The `WWW-Authenticate` realm string must be pure ASCII** — an
+  em dash in it broke *every* unauthenticated request in production (Edge Middleware headers
+  reject non-ASCII silently in a way that never surfaced locally). Fixed to plain ASCII.
+- **LLM provider chain** (`server/app.ts`), in priority order: `ANTHROPIC_API_KEY` >
+  `OPENROUTER_KEY` > `GEMINI_API_KEY` > `StubLlmClient`. All three real providers are fully
+  implemented (`server/llm/{openrouterClient,geminiClient}.ts` +
+  `server/llm/streaming/{openrouterStreamClient,geminiStreamClient}.ts`), swappable via env
+  vars with zero code changes, matching the existing `AnthropicLlmClient`/`StubLlmClient`
+  pattern from "Commas Tool Layer" above.
+  - **OpenRouter is what's actually live in production.** Model settled on
+    `nvidia/nemotron-3-super-120b-a12b:free` after two failed attempts:
+    `meta-llama/llama-3.3-70b-instruct:free` was found **retired** live, and
+    `google/gemma-4-31b-it:free` was found routed through Google's own congested shared free
+    pool (constant 429s). OpenRouter's OpenAI-compatible tool-calling gives each tool call a
+    real `id`, which sidesteps the Gemini issue below.
+  - **Gemini was tried first and abandoned as the primary** because Gemini 3.x's free tier
+    requires a `thought_signature` on every tool-call turn to replay history, which broke
+    multi-turn tool-history replay; worked around by rendering tool history as plain text
+    turns instead of structured `functionCall` parts (same fix applied to both
+    `geminiClient.ts` and `geminiStreamClient.ts`), but the free-tier rate limit still proved
+    too restrictive for live demo use, hence the fallback to OpenRouter as primary.
+  - `GET /api/health`'s `llmMode` field now reports `"openrouter"` in production (verified
+    live, see below) — Open Question 1 ("real LLM calls") is **partially resolved**: a real
+    (non-Anthropic) LLM is live and demo-tested; `AnthropicLlmClient` itself remains real,
+    complete code that has still never been exercised (no Anthropic key was added).
+- **Domain:** live at **addmorecommas.com** (corrected mid-session from an initially-assumed
+  "makemorecommas.com" — the user does not own that domain). DNS configured via Namecheap,
+  aliased through Vercel.
+- **Password protection:** password is `,,,` (Basic Auth, any username). This is a demo gate,
+  not real auth — do not treat it as a security boundary beyond "keep casual visitors out."
+- **Commas app icon/favicon:** `public/commasdefault.png` (the real Commas app icon, provided
+  by the user) is wired into `index.html` (favicon + apple-touch-icon) and
+  `src/components/shell/Sidebar.tsx`'s logo tile, replacing the placeholder `CommaMark` SVG and
+  the old `public/favicon.svg` (deleted).
+  - **Near-miss:** this exact file was accidentally deleted mid-session by an overbroad
+    `git add -A` that swept it up as if it were a stray artifact, before it had ever been
+    wired into the UI (so its purpose wasn't yet obvious from the diff). Recovered via
+    `git show <commit>:commasdefault.png` from git history. **Lesson for future sessions:**
+    before running `git add -A` / `git rm` on files that look unfamiliar or unreferenced,
+    check whether the user just added them for upcoming work — don't assume "unreferenced yet"
+    means "safe to delete."
+- **Prompt/behavior fixes found during live testing on the deployed instance:**
+  - The model was leaking raw internal tool names (e.g. `fanbasis_list_customers`) and raw
+    snake_case reason codes (e.g. `product_not_received`) into user-facing chat responses.
+    Fixed via explicit instructions in `BASE_PERSONA` (`server/agent/context/buildContext.ts`)
+    never to surface internal tool names, plus a `humanizeReason()` helper that strips
+    underscores from machine reason codes only when rendering them into the prompt.
+  - "Recommended next steps" in chat responses were verbose paragraphs; the user asked for
+    them to be "very very crisp: like 1-2 sentence long max and in numbered pointers as less as
+    possible" — added as an explicit `BASE_PERSONA` instruction.
+  - The model sometimes asked for confirmation in chat text before a write action, redundant
+    with the existing approval-card UI (see "Conversation System... Write-Approval Flow"
+    above) — fixed via an explicit system-prompt instruction (`server/agent/runtime.ts`'s
+    `toolsPrefix`) to call write tools directly and let the approval card be the only gate.
+
+## Standing git workflow instruction (must persist across sessions)
+
+**Do not merge everything to `main` directly.** Commit locally and push to
+`experiment/unified-ai-assistant` as work proceeds; only push/merge that branch into `main`
+when the user explicitly says so ("at the very end"). `npx vercel deploy --prod --yes` deploys
+whatever is in the local working directory regardless of which branch is checked out — a
+production deploy is **not** a signal that `main` has been (or should be) updated.
+
+## Verification
+
+- Full test suite, typecheck, lint, and build all clean at time of deploy.
+- Live production checks via `curl` (no browser automation available for this project):
+  unauthenticated request → 401; correct password → 200; `GET /api/health` → `{"ok":true,
+  "commasConnected":true,"llmMode":"openrouter", sources: [commas, fathom, zoom, gmail,
+  google-calendar, crm]}`.
+
+## What's still open from this pass
+
+- `AnthropicLlmClient` remains real, complete, and **never live-tested** — no Anthropic key
+  was ever added to this environment. If/when one is added, `llmMode` should flip to
+  `"anthropic"` automatically per the existing priority chain, no code changes expected.
+- OpenRouter's free-tier model landscape is volatile (two models were already found
+  retired/congested before landing on the current one) — if `nvidia/nemotron-3-super-
+  120b-a12b:free` stops working, check https://openrouter.ai/models?max_price=0 for a current
+  free alternative and swap the model string in `server/llm/openrouterClient.ts` +
+  `server/llm/streaming/openrouterStreamClient.ts`.
+- The password gate is Basic Auth against one shared static password — fine for a demo, not a
+  real access-control system. Don't extend this pattern if the project ever needs real
+  multi-user auth.
+
+# Evidence UI Overhaul: Source-Reference Chips, Accordion Drawer, Review-State Removal
+(2026-08-25)
+
+A large, multi-message UI/UX request arrived this session covering (a) an accordion-style
+evidence checklist with a detail drawer (superseding the old flat evidence list), (b)
+generalizing evidence source provenance into a reusable, connector-agnostic chip component,
+(c) folding file upload into the same edit modal, and (d) removing the evidence review/
+approval state entirely. All four landed in this pass. `docs/AI_ASSISTANT_BASELINE.md`,
+`src/pages/DashboardPage.tsx`, and `src/components/shell/TopNav.tsx` were also updated to say
+**addmorecommas** instead of **makemorecommas**, matching the live domain corrected in the
+deployment pass above.
+
+## 1. Evidence checklist accordion + detail drawer
+
+- Each evidence **category** (e.g. "Access & activity records") is now a collapsible accordion
+  section (`src/components/resolution/DisputeDetail.tsx`); expanding it reveals its individual
+  evidence entries, each showing its own title, source/file-count metadata, and attachment
+  chips — a "case-file" hierarchy replacing the old flat preview list.
+- Clicking an entry opens **`EvidenceDetailDrawer`** (new file,
+  `src/components/resolution/EvidenceDetailDrawer.tsx`) as a **center modal** (higher-opacity
+  background, not a translucent side drawer — an earlier translucent right-side drawer draft
+  was rejected by the user for letting page content bleed through). Shows title, record/
+  description, and all attached files; editable when the dispute is open, read-only when
+  resolved.
+- Real DOM-nesting bug caught by a test warning: an `<button>` was nested inside another
+  `<button>` (an attachment chip inside a clickable accordion row) — browsers silently
+  un-nest this, breaking clicks. Fixed by using `role="button"` divs with keyboard handlers
+  for the category header and entry rows instead of literal nested `<button>`s.
+
+## 2. Connector-agnostic source-reference chips (replaces "Inspect underlying source")
+
+- **Removed entirely:** the plain-text "Inspect underlying source" affordance, everywhere it
+  appeared (`EvidenceDetailDrawer`, `InvestigationReportCard`).
+- **New model** (`src/lib/types.ts` + mirrored in `server/types.ts`):
+  `EvidenceSourceRef { sourceId: SourceId; raw?: Record<string, unknown> }`. Both
+  `ProposedEvidenceCandidate` and `AIEvidenceItem` gained an optional `sources?:
+  EvidenceSourceRef[]`. This is deliberately **not** part of the `propose_add_evidence` LLM
+  tool's JSON schema — a real model can't fabricate `raw` tool-result payloads as output, so
+  only `StubLlmClient` attaches `sources` directly (bypassing the schema); real-model-proposed
+  candidates fall back to a derived single source.
+- **New reusable component** (`src/components/chat/SourceReferenceList.tsx`): renders one
+  clickable chip per source (icon + connector name + external-link glyph, ChatGPT-citation
+  style), driven purely by `sourceId` against the existing `SOURCES` registry
+  (`src/lib/mockData.ts`) and `SourceIcon` (`src/components/chat/SourceIcon.tsx`) — **zero
+  per-connector conditionals**. Any connector added to `SOURCES` automatically gets chip
+  support with no UI changes. Clicking a chip opens the existing `EvidenceInspectorModal` with
+  the connector's real mock payload.
+- **Derivation helper** (`src/lib/mockData.ts`): `deriveEvidenceSourceRefs(item)` prefers
+  `item.sources` if present, else attempts a strict label match (new private
+  `matchSourceIdFromLabel`, no fallback guessing), else returns `[]` — deliberately never
+  guesses a source for an unmatched label like a seller's own manual entry (the existing
+  lenient `sourceIdFromLabel` helper, which *does* default to `"commas"`, is kept for other
+  call sites that need a guaranteed value).
+- `InvestigationReportCard`'s read-only "AI found" badge on **not-yet-added** findings
+  (`evidenceFound`) was **deliberately kept** — judged a distinct concept from added case
+  evidence per the removal request's own scoping language ("once the seller has chosen to ADD
+  the evidence..."). If this reads as inconsistent to a future reviewer, that's the reasoning;
+  revisit only on explicit user feedback.
+
+## 3. Unified edit + upload modal
+
+- `updateEvidenceItem`'s signature changed from `{title, record}` to `{title, record, files}`
+  — this single action now covers what used to be two separate actions (edit, and the removed
+  `confirmEvidenceProof`). `proofConfirmed` is recomputed on every save:
+  `!item.proofRequired || files.length > 0`.
+- Clicking Edit on an evidence item now opens the **same** `EvidenceDetailDrawer` in edit mode
+  with a full upload experience inline: a dropzone when empty, a compact removable file list
+  when files exist, "+ Add more files," and an inline validation message ("Supporting proof is
+  required for evidence from external sources") blocking Save when proof is required and
+  missing. No separate upload modal was introduced.
+- Pre-existing attached files (plain metadata, not real `File` blobs) can't be fed into the
+  existing upload-simulation pipeline (`useEvidenceFiles`) designed for real file objects — this
+  was resolved by keeping them in a separate `keptFiles` array (simple removable list) merged
+  with newly-uploaded files only at Save time.
+
+## 4. Evidence review/approval state removed entirely
+
+- **Deleted:** `verifiedByHuman` field, the `verifyEvidenceItem` action, the "Mark as
+  reviewed" button, and the "Reviewed"/"AI found" badges **on added case evidence**
+  (distinguish from the InvestigationReportCard exception in §2 above — that's unconfirmed
+  *findings*, not added evidence).
+- Added evidence is now **active immediately** — no review/approval step exists in the product
+  at all for it. Each evidence row now exposes only **Edit** and **Delete** via a contextual
+  3-dot menu (new `EvidenceRowMenu` component in `DisputeDetail.tsx`); Edit opens
+  `EvidenceDetailDrawer` in edit mode, Delete removes the item (with the same confirm-dialog
+  pattern as before).
+- Category "Added"/"Not added" counts are unchanged: still `!item.proofRequired ||
+  item.proofConfirmed`, from the earlier "third-party evidence requires proof" pass.
+
+## Verification
+
+- **231/231 Vitest tests pass** (across 24 files) — includes new/updated coverage in
+  `tests/EvidenceAccordion.test.tsx`, `tests/EvidenceProofRequired.test.tsx`,
+  `tests/InvestigationReport.test.tsx` asserting: no "AI found"/"Reviewed" text anywhere on
+  added evidence, the 3-dot menu offers only Edit/Delete, source chips (`getByTitle("Open
+  Fathom source")`) open the inspector in place of the old "Inspect" text link, and the
+  unified modal's Save button is what the proof-required flow now gates (was "Confirm
+  evidence").
+- `npx tsc -b`, `npm run lint`, `npm run build` all clean.
+- Committed to `experiment/unified-ai-assistant`, pushed there, then — on explicit user
+  instruction this same session — fast-forward merged and pushed to `main` too. Also deployed
+  to the live Vercel production instance (`addmorecommas.com`) and re-verified via the same
+  `curl`-based health checks used in the deployment pass above (password gate, `/api/health`
+  reporting `llmMode: "openrouter"` and all 6 sources).
+- **Not done this pass:** a live-browser walkthrough of the new accordion/drawer/chip/menu UI
+  specifically — no browser automation was available for this project this session (unlike
+  most prior passes in this file, which used ad-hoc Playwright scripts). The claim of
+  correctness for this UI rests on the Vitest coverage above plus the clean build, not a
+  visual/interactive check. **A future session should do a live walkthrough of this specific
+  UI** (expand a category, open the drawer, click a source chip, edit with file upload, delete
+  via the 3-dot menu) the first time browser automation is available for this project, to
+  catch anything a DOM-level test wouldn't (visual regressions, click-target sizing, the
+  center-modal opacity actually reading as intended against the reference screenshots the user
+  provided).
+
 # Current Repository State
 
 - `docs/` — full spec set (`PROTOTYPE_SPEC.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,
@@ -1686,9 +1923,21 @@ draining credits to 0/300 via the demo buttons then clicking "Reset all demo dat
   `concurrently`, plus the existing frontend stack) and `dev`/`dev:server`/`dev:all`/
   `build`/`typecheck`/`lint`/`test` scripts. Three tsconfig projects now: app (frontend),
   node (Vite config), **server** (backend — new).
-- `.env.example` documents `ANTHROPIC_API_KEY`, `COMMAS_MCP_MODE`, `COMMAS_MCP_URL`,
-  `COMMAS_API_KEY`, `PORT`. No real `.env` file exists in this repo/environment.
-- Git: local repo on `main`, **no remote**.
+- `.env.example` documents `ANTHROPIC_API_KEY`, `OPENROUTER_KEY`, `GEMINI_API_KEY`,
+  `SITE_PASSWORD`, `COMMAS_MCP_MODE`, `COMMAS_MCP_URL`, `COMMAS_API_KEY`, `PORT`. No real
+  `.env` exists locally, but `OPENROUTER_KEY` and `SITE_PASSWORD` are set as real Vercel
+  production env vars (see "Production Deployment" above).
+- **`api/index.ts`, `vercel.json`, `middleware.ts`** — the Vercel serverless deployment layer
+  (entry point, API rewrite, Basic Auth), new this session. See "Production Deployment" above
+  for the two live-only bugs this uncovered (catch-all routing, ASCII-only auth header).
+- **`src/components/chat/SourceReferenceList.tsx`,
+  `src/components/resolution/EvidenceDetailDrawer.tsx`** — new components from the Evidence UI
+  Overhaul pass; `EvidenceRowMenu` lives inline in `DisputeDetail.tsx`.
+- Git: local repo on `main`, remote is a **private GitHub repo**
+  (`experiment/unified-ai-assistant` is the working branch; **do not push directly to `main`
+  without explicit user instruction** — see the standing git-workflow note under "Production
+  Deployment" above). **Live production deploy:** https://addmorecommas.com (Vercel,
+  password-gated, `llmMode: "openrouter"`).
 
 # Completed
 
@@ -1772,23 +2021,41 @@ draining credits to 0/300 via the demo buttons then clicking "Reset all demo dat
   Implementation Pass" above, including the deliberately-skipped items. Verified:
   typecheck/lint/build clean, 94 tests (+12 net), 20-check live walkthrough of the 12
   required flows, zero console errors.
+- **Production deployment** (2026-08-2x) — live at https://addmorecommas.com on Vercel,
+  password-gated, on a real free-tier LLM (OpenRouter) with the same code path also
+  supporting real Anthropic/Gemini keys with zero changes — see "Production Deployment"
+  above, including two live-only bugs found and fixed (Vercel API catch-all routing, a
+  non-ASCII auth-header byte). Repo also moved to a private GitHub remote this pass.
+- **Evidence UI overhaul** (2026-08-25) — accordion + center-modal detail drawer, a
+  connector-agnostic source-reference chip component (no more per-connector UI branching, no
+  more "Inspect underlying source" text), a unified edit+upload modal, and full removal of the
+  evidence review/approval state (no more "Mark as reviewed"/"AI found"/"Reviewed") in favor
+  of a 3-dot Edit/Delete menu — see "Evidence UI Overhaul" above. Verified: typecheck/lint/
+  build clean, 231/231 tests (+137 net this session across several stacked features), and live
+  production `curl` health checks. **Not done:** a live-browser walkthrough of this specific
+  UI — no browser automation was available for this project this session; flagged as the top
+  follow-up in "Evidence UI Overhaul" above.
 
 # In Progress
 
-- Nothing implementation-wise. **Next up, in priority order:** (1) the 7-flow stabilization
-  audit and a dedicated cross-surface visual polish pass (typography/spacing/border/shadow
-  comparison), both requested two sessions ago and still deferred; (2) Dashboard's own listed
-  gaps if visual completeness matters more than new features right now: Announcements carousel
-  motion, chart hover tooltips, narrow-width (<1440px) testing of the new grid; (3) get an
-  `ANTHROPIC_API_KEY` from the user and confirm the real `AnthropicLlmClient` path live (still
-  real code, never actually invoked); (4) remaining `fanbasis_*` read tools / SSE streaming,
-  unchanged from before this session.
+- Nothing implementation-wise. **Next up, in priority order:** (1) a live-browser walkthrough
+  of the new evidence accordion/drawer/source-chip/3-dot-menu UI, deferred this session for
+  lack of browser automation availability — see "Evidence UI Overhaul" above; (2) the 7-flow
+  stabilization audit and a dedicated cross-surface visual polish pass (typography/spacing/
+  border/shadow comparison), both requested several sessions ago and still deferred; (3)
+  Dashboard's own listed gaps if visual completeness matters more than new features right now:
+  Announcements carousel motion, chart hover tooltips, narrow-width (<1440px) testing of the
+  new grid; (4) get a real `ANTHROPIC_API_KEY` from the user and confirm `AnthropicLlmClient`
+  live in production (OpenRouter is live and demo-tested, but Anthropic itself still isn't);
+  (5) remaining `fanbasis_*` read tools / SSE streaming, unchanged from before this session.
 
 # Not Implemented
 
-- **Live-tested real LLM calls.** `AnthropicLlmClient` is complete, real code but has never
-  been exercised — no `ANTHROPIC_API_KEY` in this environment. Every test and live-browser
-  check this session ran on `StubLlmClient`. See "Commas Tool Layer" § What's still not real.
+- ~~Live-tested real LLM calls~~ **Partially done (2026-08-2x)** — `OPENROUTER_KEY` is set in
+  production and `GET /api/health` reports `llmMode: "openrouter"` live; a real (non-stub,
+  non-Anthropic) LLM is genuinely answering user messages in production. `AnthropicLlmClient`
+  itself is still complete, real code that has **never** been exercised — no Anthropic key
+  exists anywhere in this environment. See "Production Deployment" above.
 - **Live-tested real Commas MCP connection.** `connectReal()` is complete, real code, tested
   only against a deliberately unreachable address. No Commas API key exists here.
 - ~~Full Resolution Center~~ **Done** (list + detail ported). Still not ported from the old
@@ -1873,17 +2140,21 @@ the user hadn't answered — flagged in Open Questions where an override is stil
 
 # Open Questions
 
-1. **Real LLM calls.** The code path (`AnthropicLlmClient`) is now fully implemented and
-   wired — the only missing piece is the user supplying `ANTHROPIC_API_KEY` (in `.env`) and
-   accepting per-request cost. Nothing else should need to change; `GET /api/health`'s
-   `llmMode` field flips from `"stub"` to `"anthropic"` automatically once the key is set.
+1. **Real Anthropic LLM calls.** The code path (`AnthropicLlmClient`) is fully implemented and
+   wired — the only missing piece is the user supplying `ANTHROPIC_API_KEY` and accepting
+   per-request cost. Nothing else should need to change; `GET /api/health`'s `llmMode` field
+   flips to `"anthropic"` automatically once the key is set (it currently reports
+   `"openrouter"` in production — see "Production Deployment" above — proving the priority
+   chain and swap mechanism both work).
 2. **Real Commas MCP mode.** The code path (`CommasMcpClient.connectReal`) is now fully
    implemented and wired — needs `COMMAS_MCP_MODE=real`, `COMMAS_MCP_URL` (the Railway URL
    recorded in this file's Integrations section, or whatever the current real endpoint is),
    and a QA sandbox `COMMAS_API_KEY`. Only ever use a sandbox key, never production — write
    tools aren't implemented yet, but the read tools would hit a real account.
-3. **GitHub:** create a remote for this repo? (None exists; old repo is public.) Ask before
-   pushing.
+3. ~~**GitHub:** create a remote for this repo?~~ **Resolved (2026-08-2x)** — a private GitHub
+   repo now exists as the remote; `experiment/unified-ai-assistant` is the working branch,
+   `main` receives fast-forward merges only on explicit user instruction (see the standing
+   git-workflow note under "Production Deployment" above).
 4. Exact write-tool list of the real Commas MCP server (docs inconsistent: 11 vs 27 vs 30+).
    Mock write tools follow the documented write *actions*; reconcile if real mode is used.
 5. Whether Commas plans an in-app agent surface of their own (interview said yes, per-org
@@ -1891,7 +2162,10 @@ the user hadn't answered — flagged in Open Questions where an override is stil
 
 Resolved since recon (defaults adopted into the specs; user may still override): chat
 persistence (in-memory + JSON snapshot), loop mechanism (tool runner), Hono over Express,
-stub-LLM testing strategy, credits pricing, `commas_*` namespacing for mock dispute tools.
+stub-LLM testing strategy, credits pricing, `commas_*` namespacing for mock dispute tools,
+GitHub remote (private repo, now exists), production hosting (Vercel + custom domain +
+password gate), which free LLM provider to run live (OpenRouter, not Gemini — see "Production
+Deployment" above for why).
 
 # Risks / Blockers
 
@@ -1912,6 +2186,11 @@ stub-LLM testing strategy, credits pricing, `commas_*` namespacing for mock disp
   Bearer). Verify against the live server before relying on either.
 - **Rebrand residue:** `fanbasis_*` names and `fanbasis.com` URLs are the real identifiers;
   don't "clean them up" to `commas_*` in mock tools if fidelity to the real server matters.
+- **Free-tier LLM volatility (new, 2026-08-2x):** the production instance runs on OpenRouter's
+  free model tier, which has already forced two model swaps in one session (one model
+  retired, one routed through a congested shared pool). Treat `llmMode: "openrouter"` in
+  `GET /api/health` as something to spot-check before a demo, not something to assume stays
+  working — see "Production Deployment" above for the current model and how to swap it.
 
 # Next Steps
 
@@ -1961,8 +2240,18 @@ Future Claude Code sessions must:
    product/interview background — but its architecture is explicitly NOT the template for this repo.
 4. Never put API keys in the repo; environment variables only. Real Commas calls (if ever
    enabled) use the QA sandbox.
-5. Do not create a GitHub remote or push without asking (Open Question 4).
+5. **Git workflow (standing instruction):** commit locally and push to
+   `experiment/unified-ai-assistant` as work proceeds; only push/merge that branch into `main`
+   when the user explicitly says so. Do not assume a production deploy (`npx vercel deploy
+   --prod --yes`, which deploys the local working directory regardless of branch) implies
+   `main` should also be updated — those are two separate, separately-gated actions.
 6. Do not present unconfirmed capabilities as real: anything not in the CONFIRMED sections
    above is an assumption — say so.
 7. The commasdocs.com fetch method that works is documented under Confirmed Technical
    Decisions (curl the raw HTML; content is inside script payloads).
+8. **No browser automation was available for this project as of 2026-08-25** — the last two
+   feature passes (Production Deployment, Evidence UI Overhaul) were verified via `curl`
+   health checks and the Vitest suite only, not a live click-through. If browser automation
+   becomes available, the top-priority follow-up is the live walkthrough flagged at the end of
+   "Evidence UI Overhaul" above — don't assume the DOM-level tests already covered everything
+   a visual pass would catch.
