@@ -10,7 +10,7 @@ import type {
   SourceId,
   SourceInfo,
 } from "../lib/types";
-import { DEFAULT_ENABLED_SOURCES, INITIAL_CREDITS, SEED_CHATS, SOURCES } from "../lib/mockData";
+import { CREDIT_COSTS, creditCostForDisputeTurn, DEFAULT_ENABLED_SOURCES, INITIAL_CREDITS, SEED_CHATS, SOURCES } from "../lib/mockData";
 import { DISPUTES, disputesNeedingAttention, type AIEvidenceItem, type EvidenceSourceType } from "../lib/disputeData";
 import {
   runAgentTurn,
@@ -42,12 +42,20 @@ import {
  */
 
 const STEP_INTERVAL_MS = 650;
-/** The only credit-consumption rule in this prototype: sending a message costs exactly 1
- * credit, charged once per sendMessage call — never per tool step, never per write action, and
- * never again when an approve/decline continues the same turn (docs/active-context.md — "Chat
- * Credit System"). Opening a chat, switching conversations, opening the AI panel, and viewing
- * history never touch credits. */
-const CREDIT_COST_PER_MESSAGE = 1;
+/**
+ * Credit consumption rule (docs/AI_ASSISTANT_IMPLEMENTATION_STATUS.md's current phase; tunable
+ * amounts live in `src/lib/mockData.ts`'s `CREDIT_COSTS`): one unified balance for global chat
+ * AND dispute investigations — never separate balances — charged once per completed turn,
+ * AFTER the agent's work finishes successfully. Never charged: a technical failure (network
+ * error, server-authored error), a cancelled/aborted run, or an approve/decline round-trip's
+ * own intermediate pause (that's still the SAME turn as the message that triggered it, not a
+ * second "message sent" event — see `applyPlan`). Opening a chat, switching conversations,
+ * opening the AI panel, and viewing history never touch credits either. See `chargeCredits`
+ * (dispute/legacy path, inside `applyPlan`) and the streaming path's own charge call in
+ * `sendMessage` for the two places this actually fires — deliberately not a single shared
+ * "charge in finalizeStreamedMessage" helper, since that function is also called on cancellation
+ * and on error, where charging would be wrong.
+ */
 /** How many prior turns to send the agent for conversation memory — capped so a long chat's
  * payload doesn't grow unbounded (server/app.ts enforces the same cap defensively). */
 const HISTORY_TURN_LIMIT = 20;
@@ -256,6 +264,14 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     setChats((prev) => prev.map((c) => (c.id === chatId ? { ...c, status } : c)));
   }, []);
 
+  /** The only place `usedCredits` is ever incremented — clamped so it can never exceed
+   * `totalCredits` (the balance floors at 0, never goes negative, even if a turn's real cost
+   * exceeds what was left when it started — there's no way to know the cost until the work is
+   * actually done, see `CREDIT_COSTS`). */
+  const chargeCredits = useCallback((cost: number) => {
+    setCredits((prev) => ({ ...prev, usedCredits: Math.min(prev.totalCredits, prev.usedCredits + cost) }));
+  }, []);
+
   const createChat = useCallback((context?: PageContext) => {
     // Reuse an already-empty chat with the same context signature instead of spawning a new
     // one — repeated "New chat" clicks (or repeated panel opens) used to pile up empty rows in
@@ -340,10 +356,12 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   }, [runChatId, clearTimers, setChatStatus]);
 
   /** Shared handling for both a fresh agent run and an approve/decline continuation: animate
-   * any steps the backend already executed, then either finalize with an answer/error, or
-   * pause on a new pendingApproval. Never touches credits — the 1-credit cost is charged once,
-   * up front, in sendMessage itself; an approve/decline continuation is part of the same turn,
-   * not a new "message sent" event, so it costs nothing further. */
+   * any steps the backend already executed, then either finalize with an answer/error, or pause
+   * on a new pendingApproval. Credits are charged HERE, exactly once, only on the branch that
+   * actually finalizes with a non-error answer — never on the pendingApproval pause (that isn't
+   * "work finished" yet; the SAME turn's later approve/decline call re-enters this function and
+   * charges then, once it truly finishes), and never on `plan.error` (a technical failure).
+   * `cancelledRef` gates the whole callback, so an aborted run never reaches the charge either. */
   const applyPlan = useCallback(
     (chatId: string, plan: AgentRunPlan) => {
       if (cancelledRef.current) return;
@@ -375,6 +393,10 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
           return;
         }
 
+        if (!plan.error) {
+          chargeCredits(creditCostForDisputeTurn(plan));
+        }
+
         const answerText = plan.error ? `I ran into a problem: ${plan.error.message}` : plan.answer;
         const assistantMessage: ChatMessage = {
           id: newId("m"),
@@ -403,7 +425,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       }, finalDelay);
       timersRef.current.push(finalTimer);
     },
-    [setChatStatus],
+    [setChatStatus, chargeCredits],
   );
 
   /** Appends a new, empty, `streaming: true` assistant message — the placeholder that
@@ -483,8 +505,10 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       const history = historyFor(chat);
       lastPromptRef.current = trimmed;
 
-      // The only credit charge for this turn — see CREDIT_COST_PER_MESSAGE's doc comment.
-      setCredits((prev) => ({ ...prev, usedCredits: Math.min(prev.totalCredits, prev.usedCredits + CREDIT_COST_PER_MESSAGE) }));
+      // No credit charge here — moved to AFTER the work completes successfully (applyPlan for
+      // the dispute/legacy path below; the streaming success branch further down for everything
+      // else), per CREDIT_COSTS's doc comment. Blocking a NEW send at 0 balance (the guard
+      // above) is still enforced up front — only the CHARGE itself waits for real work to exist.
 
       setChats((prev) =>
         prev.map((c) =>
@@ -577,6 +601,10 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
             return;
           }
           finalizeStreamedMessage(chatId, messageId);
+          // Genuine success only: not cancelled, not superseded, not an error — the one place
+          // the streaming path charges. Always `standardMessage` (see CREDIT_COSTS's comment on
+          // why streaming has no tool-detail signal to price a heavier tier by).
+          chargeCredits(CREDIT_COSTS.standardMessage);
         } catch (err) {
           if (cancelledRef.current || supersededByLaterRun()) {
             finalizeStreamedMessage(chatId, messageId);
@@ -602,7 +630,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
         }, 250);
       })();
     },
-    [chats, credits, runChatId, clearTimers, applyPlan, ensureStreamingMessage, appendStreamDelta, finalizeStreamedMessage],
+    [chats, credits, runChatId, clearTimers, applyPlan, ensureStreamingMessage, appendStreamDelta, finalizeStreamedMessage, chargeCredits],
   );
 
   const resolveApproval = useCallback(

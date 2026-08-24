@@ -117,6 +117,39 @@ export const CREDIT_PACKAGES: { id: string; credits: number; price: string }[] =
   { id: "250", credits: 250, price: "$100" },
 ];
 
+/**
+ * One unified credit model for the whole workspace — global chat and dispute investigations
+ * draw from the exact same `CreditsState` (useChatStore's `credits`), never separate balances.
+ * These three numbers are the entire demo-configurable pricing model: tune them here and every
+ * chat surface picks up the change, no other file needs to. Charged once per completed turn,
+ * by `creditCostForDisputeTurn`/`useChatStore.tsx`'s `chargeCredits`, only AFTER the agent's
+ * work finishes successfully — never up front, never on a technical failure.
+ */
+export const CREDIT_COSTS = {
+  /** A plain answer: no tool calls, or a single source checked. This is also the only tier
+   * global/dashboard chat can ever incur — the shared-agent streaming transport doesn't report
+   * tool-call detail to the client, so there's no real signal to price a heavier tier by there. */
+  standardMessage: 1,
+  /** A dispute-chat turn that checked 2+ sources this turn (e.g. Commas + Gmail, or an
+   * explicit "search my connected apps" sweep) without producing a full structured
+   * investigation report. */
+  multiSourceInvestigation: 3,
+  /** A full multi-source dispute investigation — the structured `InvestigationReport` (case
+   * summary, evidence found, contradictions, case strength, …). The most work the agent does in
+   * one turn, priced accordingly. */
+  advancedInvestigation: 5,
+} as const;
+
+/** Which `CREDIT_COSTS` tier a completed dispute-chat turn actually earned, decided from real
+ * signals already on the response — never guessed, never charged before the work is known.
+ * Global/dashboard chat (the streaming path) has no equivalent tool-detail signal, so it always
+ * costs `standardMessage` — see `CREDIT_COSTS.standardMessage`'s own comment. */
+export function creditCostForDisputeTurn(plan: { toolSummary: { length: number }; investigationReport?: unknown }): number {
+  if (plan.investigationReport) return CREDIT_COSTS.advancedInvestigation;
+  if (plan.toolSummary.length >= 2) return CREDIT_COSTS.multiSourceInvestigation;
+  return CREDIT_COSTS.standardMessage;
+}
+
 export const SUGGESTED_CAPABILITIES: SuggestedCapability[] = [
   { id: "sales-summary", label: "Summarize my sales", prompt: "Summarize my sales this month" },
   { id: "find-customer", label: "Look up a customer", prompt: "Look up customer sarah.johnson@email.com" },
