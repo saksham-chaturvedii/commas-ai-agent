@@ -46,10 +46,15 @@ in local dev and in tests) both deploy from this one repo — no separate backen
   Auth, checked against the `SITE_PASSWORD` env var) — see the comment in that file.
 - **Environment variables** (set in the Vercel project, never committed — see `.env.example`):
   - `SITE_PASSWORD` — required to password-protect the deployment.
-  - `ANTHROPIC_API_KEY` — optional and **not free** (pay-per-token, no free tier). Without it,
-    the agent runs on `StubLlmClient`: the same real tool calls, multi-source investigation, and
-    approval flow, with deterministic (not model-generated) reasoning text. Set this only if you
-    have your own key and accept the cost.
+  - `ANTHROPIC_API_KEY` — optional and **not free** (pay-per-token, no free tier; a key with a
+    $0 credit balance authenticates but every real request fails with a billing error — set
+    this only once the Anthropic account behind it has credits).
+  - `GEMINI_API_KEY` — optional and **genuinely free** (Google AI Studio, published free-tier
+    rate limits, no credit card). Used only when `ANTHROPIC_API_KEY` is unset — this is the
+    practical free real-LLM option. `GEMINI_MODEL` overrides the default model name if needed.
+  - Without either key, the agent runs on `StubLlmClient`: the same real tool calls,
+    multi-source investigation, and approval flow, with deterministic (not model-generated)
+    reasoning text — fully functional, zero configuration, zero cost.
   - `COMMAS_MCP_MODE` (defaults to `mock`, safe to leave unset).
 
 **Known limitation:** `SessionStore` and `PendingApprovalStore` (server/agent/sessions,

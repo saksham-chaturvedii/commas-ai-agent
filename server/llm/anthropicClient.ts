@@ -82,6 +82,10 @@ export class AnthropicLlmClient implements LlmClient {
 }
 
 function classifyAnthropicError(err: unknown): AgentError {
+  // The AgentError sent to the client always carries a generic message (never leaks raw API
+  // error detail to the browser) — log the real one server-side, or a real failure is
+  // undiagnosable from the client response alone.
+  console.error("[anthropic] request failed:", err instanceof Error ? err.message : err);
   if (err instanceof Anthropic.AuthenticationError) {
     return new AgentError("auth_failed", "The Anthropic API key is invalid.", err);
   }

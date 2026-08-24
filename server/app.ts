@@ -11,6 +11,7 @@ import { runAgentTurn, resumeAfterApproval } from "./agent/runtime.js";
 import { AgentError, classifyError } from "./agent/errors.js";
 import { StubLlmClient } from "./llm/stubClient.js";
 import { AnthropicLlmClient } from "./llm/anthropicClient.js";
+import { GeminiLlmClient } from "./llm/geminiClient.js";
 import type { LlmClient } from "./llm/types.js";
 import type { AgentApproveRequest, AgentRunRequest, AgentRunResponse, ConversationTurn, SourceId } from "./types.js";
 // --- shared agent runtime (docs/AI_ASSISTANT_ARCHITECTURE.md) — additive, alongside the legacy
@@ -20,6 +21,7 @@ import { PendingApprovalStore } from "./agent/approvals/store.js";
 import { runSharedAgent } from "./agent/runtime/sharedAgent.js";
 import type { DisputeFacts, WorkspaceDisputeSummary } from "./agent/context/model.js";
 import { AnthropicStreamClient } from "./llm/streaming/anthropicStreamClient.js";
+import { GeminiStreamClient } from "./llm/streaming/geminiStreamClient.js";
 import { StubStreamClient } from "./llm/streaming/stubStreamClient.js";
 import type { StreamingLlmClient } from "./llm/streaming/types.js";
 
@@ -82,22 +84,35 @@ export async function createApp() {
 
   const registry: Map<string, RegisteredTool> = await buildToolRegistry(adapters);
 
+  // Provider priority: Anthropic (if a key is set — real Claude reasoning, but pay-per-token,
+  // no free tier) > Gemini (if a key is set — genuinely free via Google AI Studio) > the
+  // deterministic stub (always available, zero configuration, still drives every real tool
+  // call/investigation/approval flow end to end — see server/llm/stubClient.ts). Both real
+  // clients implement the exact same LlmClient/StreamingLlmClient interfaces the stub does, so
+  // the agent runtime never knows which one it's talking to.
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-  const llmClient: LlmClient = anthropicApiKey ? new AnthropicLlmClient(anthropicApiKey) : new StubLlmClient();
-  const llmMode = anthropicApiKey ? "anthropic" : "stub";
-  if (!anthropicApiKey) {
+  const geminiApiKey = process.env.GEMINI_API_KEY;
+  let llmClient: LlmClient;
+  let streamingLlmClient: StreamingLlmClient;
+  let llmMode: "anthropic" | "gemini" | "stub";
+  if (anthropicApiKey) {
+    llmClient = new AnthropicLlmClient(anthropicApiKey);
+    streamingLlmClient = new AnthropicStreamClient(anthropicApiKey);
+    llmMode = "anthropic";
+  } else if (geminiApiKey) {
+    llmClient = new GeminiLlmClient(geminiApiKey);
+    streamingLlmClient = new GeminiStreamClient(geminiApiKey);
+    llmMode = "gemini";
+  } else {
+    llmClient = new StubLlmClient();
+    streamingLlmClient = new StubStreamClient();
+    llmMode = "stub";
     console.warn(
-      "[llm] ANTHROPIC_API_KEY is not set — using the deterministic stub LLM. Real tool calls " +
-        "still run for real against connected sources; only the reasoning step is scripted.",
+      "[llm] Neither ANTHROPIC_API_KEY nor GEMINI_API_KEY is set — using the deterministic " +
+        "stub LLM. Real tool calls still run for real against connected sources; only the " +
+        "reasoning step is scripted.",
     );
   }
-
-  // Shared agent runtime (docs/AI_ASSISTANT_ARCHITECTURE.md §4) — its own streaming LLM client
-  // and its own session store, both created fresh per createApp() call exactly like the legacy
-  // llmClient/registry above, so tests (and separate server processes) never share state.
-  const streamingLlmClient: StreamingLlmClient = anthropicApiKey
-    ? new AnthropicStreamClient(anthropicApiKey)
-    : new StubStreamClient();
   const sessionStore = new SessionStore();
   const approvalStore = new PendingApprovalStore();
 

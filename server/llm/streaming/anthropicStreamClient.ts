@@ -94,6 +94,9 @@ export class AnthropicStreamClient implements StreamingLlmClient {
 }
 
 function classifyAnthropicError(err: unknown): AgentError {
+  // Same reasoning as server/llm/anthropicClient.ts's classifier — the client-facing message is
+  // always generic, so log the real one here or a failure is undiagnosable from the outside.
+  console.error("[anthropic-stream] request failed:", err instanceof Error ? err.message : err);
   if (err instanceof Anthropic.AuthenticationError) {
     return new AgentError("auth_failed", "The Anthropic API key is invalid.", err);
   }
