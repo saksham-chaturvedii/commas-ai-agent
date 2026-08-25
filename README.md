@@ -42,10 +42,7 @@ in local dev and in tests) both deploy from this one repo — no separate backen
   `/api/*` request to the real Hono app (`createApp()`, memoized per warm instance) via
   `hono/vercel`'s `handle()` — the exact same routes (`/api/health`, `/api/agent/run`,
   `/api/agent/approve`, `/api/agent/stream`) as `server/index.ts` serves locally.
-- **`middleware.ts`** gates the whole deployment behind a single shared password (HTTP Basic
-  Auth, checked against the `SITE_PASSWORD` env var) — see the comment in that file.
 - **Environment variables** (set in the Vercel project, never committed — see `.env.example`):
-  - `SITE_PASSWORD` — required to password-protect the deployment.
   - `ANTHROPIC_API_KEY` — optional and **not free** (pay-per-token, no free tier; a key with a
     $0 credit balance authenticates but every real request fails with a billing error — set
     this only once the Anthropic account behind it has credits).
